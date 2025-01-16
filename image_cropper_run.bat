@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: Pythonがインストールされているか確認
+:: Check if Python is installed
 python --version > nul 2>&1
 if errorlevel 1 (
     echo Python is not installed. Please install Python first.
@@ -9,21 +9,19 @@ if errorlevel 1 (
     exit /b
 )
 
-:: 必要なパッケージをインストール
+:: Install required packages
 echo Installing required packages...
 python -m pip install --upgrade pip
 python -m pip install pillow tkinterdnd2
 
-:: スクリプトのディレクトリに移動
+:: Change to script directory
 cd /d "%~dp0"
 
-:: メインスクリプトを実行
+:: Run main script
 echo Starting Image Cropper...
 python image_cropper.py
-
 if errorlevel 1 (
     echo An error occurred while running the application.
     pause
 )
-
 exit /b
