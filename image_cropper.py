@@ -582,6 +582,9 @@ class ImageCropper:
             self.current_rect_coords = [x1, y1]
             self.rect_width = x2 - x1
             self.rect_height = y2 - y1
+            
+            # サイズ表示を更新
+            self._update_size_labels()
 
         self.last_drag_y = event.y
         self.last_drag_x = event.x  # X座標も更新
@@ -856,14 +859,53 @@ class ImageCropper:
         if original_image.mode != 'RGBA':
             original_image = original_image.convert('RGBA')
 
-        # 現在の回転角度を適用（90度回転と自由回転の両方）
+        # 現在の回転角度を適用
         total_rotation = (self.rotation_angle + self.free_rotation_angle) % 360
         if total_rotation != 0:
-            original_image = original_image.rotate(
-                total_rotation,  # マイナスを外す（時計回りに合わせる）
-                expand=True,
-                fillcolor='white'
-            )
+            if total_rotation % 90 == 0:  # 90度単位の回転
+                original_image = original_image.rotate(
+                    total_rotation,
+                    expand=True,
+                    fillcolor='white'
+                )
+            else:  # 自由回転
+                # PILからOpenCV形式に変換
+                import cv2
+                import numpy as np
+                img_array = np.array(original_image)
+                # RGBA → BGRA (OpenCV形式)
+                img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGRA)
+                
+                # 画像の中心を計算
+                height, width = img_array.shape[:2]
+                center = (width/2, height/2)
+                
+                # 回転行列を作成
+                rotation_matrix = cv2.getRotationMatrix2D(center, total_rotation, 1.0)
+                
+                # 回転後のサイズを計算
+                abs_cos = abs(rotation_matrix[0,0]) 
+                abs_sin = abs(rotation_matrix[0,1])
+                new_width = int(height * abs_sin + width * abs_cos)
+                new_height = int(height * abs_cos + width * abs_sin)
+                
+                # 移動を調整（中心に配置）
+                rotation_matrix[0, 2] += new_width/2 - center[0]
+                rotation_matrix[1, 2] += new_height/2 - center[1]
+                
+                # 回転を適用（LANCZOS法使用）
+                rotated = cv2.warpAffine(
+                    img_array, 
+                    rotation_matrix, 
+                    (new_width, new_height),
+                    flags=cv2.INTER_LANCZOS4,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(255, 255, 255, 255)  # 白色で埋める
+                )
+                
+                # OpenCVからPIL形式に戻す
+                rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
+                original_image = Image.fromarray(rotated)
 
         # 表示用画像と元画像のサイズ比を計算
         scale_factor = original_image.size[0] / self.pil_image.size[0]

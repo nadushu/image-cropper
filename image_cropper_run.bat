@@ -12,7 +12,7 @@ if errorlevel 1 (
 :: Install required packages
 echo Installing required packages...
 python -m pip install --upgrade pip
-python -m pip install pillow tkinterdnd2
+python -m pip install pillow tkinterdnd2 opencv-python
 
 :: Change to script directory
 cd /d "%~dp0"
