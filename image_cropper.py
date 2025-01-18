@@ -405,8 +405,8 @@ class ImageCropper:
         self.is_rotating = True
         self.rotation_start_angle = self.free_rotation_angle
         self.rotation_start_x = event.x
-        # 開始時に元画像を保存
-        self.original_image = Image.open(self.current_file_path)
+        # 開始時に画像を保存
+        self.original_image = self.pil_image.copy()
         if self.original_image.mode != 'RGBA':
             self.original_image = self.original_image.convert('RGBA')
 
@@ -739,11 +739,30 @@ class ImageCropper:
 
     def load_image_from_path(self, file_path):
         try:
-            self.pil_image = Image.open(file_path)
+            # まず元画像を読み込み
+            original_image = Image.open(file_path)
+            if original_image.mode != 'RGBA':
+                original_image = original_image.convert('RGBA')
+
+            # 表示用の最大サイズを設定
+            MAX_DISPLAY_SIZE = 2000  # この値は調整可能
+
+            # 画像が大きすぎる場合は縮小
+            width, height = original_image.size
+            if width > MAX_DISPLAY_SIZE or height > MAX_DISPLAY_SIZE:
+                # アスペクト比を維持しながら縮小
+                ratio = min(MAX_DISPLAY_SIZE / width, MAX_DISPLAY_SIZE / height)
+                new_size = (int(width * ratio), int(height * ratio))
+                self.pil_image = original_image.resize(new_size, Image.Resampling.LANCZOS)
+            else:
+                self.pil_image = original_image
+
+            # 元のファイルパスは保持（保存時に使用）
             self.current_file_path = file_path
             self._init_image_settings()
             self.display_image()
-            self._update_size_labels()  # サイズ表示を更新
+            self._update_size_labels()
+
         except Exception as e:
             tk.messagebox.showerror("Error", f"Failed to load image: {str(e)}")
 
@@ -831,28 +850,35 @@ class ImageCropper:
         """選択範囲の画像を取得"""
         if not self.rect_id:
             return None
-            
+                
+        # 元の画像を読み込み
+        original_image = Image.open(self.current_file_path)
+        if original_image.mode != 'RGBA':
+            original_image = original_image.convert('RGBA')
+
+        # 現在の回転角度を適用（90度回転と自由回転の両方）
+        total_rotation = (self.rotation_angle + self.free_rotation_angle) % 360
+        if total_rotation != 0:
+            original_image = original_image.rotate(
+                total_rotation,  # マイナスを外す（時計回りに合わせる）
+                expand=True,
+                fillcolor='white'
+            )
+
+        # 表示用画像と元画像のサイズ比を計算
+        scale_factor = original_image.size[0] / self.pil_image.size[0]
+        
+        # 表示用の座標を元画像のサイズに変換
         coords = self.canvas.coords(self.rect_id)
+        x1 = (coords[0] - self.image_bounds['x1']) / self.scale * scale_factor
+        y1 = (coords[1] - self.image_bounds['y1']) / self.scale * scale_factor
+        x2 = (coords[2] - self.image_bounds['x1']) / self.scale * scale_factor
+        y2 = (coords[3] - self.image_bounds['y1']) / self.scale * scale_factor
         
-        # スケールと位置を考慮して正確なピクセル座標を計算
-        x1 = (coords[0] - self.image_bounds['x1']) / self.scale
-        y1 = (coords[1] - self.image_bounds['y1']) / self.scale
-        x2 = (coords[2] - self.image_bounds['x1']) / self.scale
-        y2 = (coords[3] - self.image_bounds['y1']) / self.scale
+        # 整数に変換
+        x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
         
-        # 幅と高さを直接計算して整数に
-        width = int(x2 - x1)
-        height = int(y2 - y1)
-        
-        # 開始位置は切り捨て
-        x1 = int(x1)
-        y1 = int(y1)
-        
-        # 終了位置は開始位置に整数化した幅/高さを加算
-        x2 = x1 + width
-        y2 = y1 + height
-        
-        return self.pil_image.crop((x1, y1, x2, y2))
+        return original_image.crop((x1, y1, x2, y2))
 
     def _convert_coords_to_image_space(self, coords):
         """キャンバス座標を画像座標に変換"""
