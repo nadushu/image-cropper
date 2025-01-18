@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 import os
 from tkinterdnd2 import DND_FILES, TkinterDnD
+import math
 
 class ImageCropper:
     """画像切り抜きツール"""  
@@ -32,6 +33,16 @@ class ImageCropper:
         self.photo = None
         self.current_file_path = None
         self.image_bounds = None
+        
+        # フリー回転用の変数を追加
+        self.is_rotating = False
+        self.rotation_start_x = None
+        self.rotation_start_y = None
+        self.free_rotation_angle = 0  # フリー回転用の角度
+        self.rotation_timer = None  # 回転処理用のタイマーを追加
+
+        # 左右反転用の変数
+        self.is_flipped = False
         
         # 保存先のデフォルトパス用変数を追加
         self.save_directory = None
@@ -139,6 +150,22 @@ class ImageCropper:
         self.rotate_button = tk.Button(self.button_frame, text="Rotate", command=self.rotate_image)
         self.rotate_button.pack(side=tk.LEFT, padx=5, pady=5)
         
+        # 回転リセットボタン
+        self.reset_rotation_button = tk.Button(
+            self.button_frame, 
+            text="回転リセット", 
+            command=self.reset_rotation
+        )
+        self.reset_rotation_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+        # 左右反転ボタン
+        self.flip_button = tk.Button(
+            self.button_frame, 
+            text="左右反転", 
+            command=self.flip_horizontal
+        )
+        self.flip_button.pack(side=tk.LEFT, padx=5, pady=5)
+
         # Fixed Sizeトグルボタン
         self.fixed_size_var = tk.BooleanVar()
         self.fixed_size_button = tk.Checkbutton(
@@ -196,6 +223,23 @@ class ImageCropper:
         self.root.bind('r', lambda e: self.rotate_image())
         self.root.bind('<Alt-s>', lambda e: self.save_crop(force_resize=True))
         self.root.bind("<Configure>", self.on_window_resize)
+        
+         # 回転リセット用のキーバインド
+        self.root.bind('0', lambda e: self.reset_rotation())
+        
+        # 左右反転用のキーバインド
+        self.root.bind('f', lambda e: self.flip_horizontal())
+        
+        # フリー回転用のバインド
+        self.canvas.bind('<Shift-Button-1>', self.start_free_rotation)
+        self.canvas.bind('<Shift-B1-Motion>', self.do_free_rotation)
+        self.canvas.bind('<Shift-ButtonRelease-1>', self.end_free_rotation)
+        
+        # 矩形の移動用キーバインド
+        self.root.bind('<Left>', lambda e: self.move_rect('left'))
+        self.root.bind('<Right>', lambda e: self.move_rect('right'))
+        self.root.bind('<Up>', lambda e: self.move_rect('up'))
+        self.root.bind('<Down>', lambda e: self.move_rect('down'))
 
         # ウィンドウサイズを記録
         self.last_width = self.root.winfo_width()
@@ -236,13 +280,19 @@ class ImageCropper:
 
     def _update_canvas_settings(self, scaled_size):
         """キャンバスの設定を更新"""
-        scaled_width, scaled_height = scaled_size
+        # 現在のビューポートサイズを取得
         viewport_width = self.canvas.winfo_width()
         viewport_height = self.canvas.winfo_height()
         
-        # スクロール領域を現在のビューポートサイズと画像サイズの大きい方に設定
-        scroll_width = max(viewport_width, scaled_width + 40)  # 余白分を追加
-        scroll_height = max(viewport_height, scaled_height + 40)
+        if self.is_rotating:
+            # 回転時はビューポートサイズを超えないように設定
+            scroll_width = viewport_width
+            scroll_height = viewport_height
+        else:
+            # 通常時は既存の動作を維持
+            scaled_width, scaled_height = scaled_size
+            scroll_width = max(viewport_width, scaled_width + 40)
+            scroll_height = max(viewport_height, scaled_height + 40)
         
         # スクロール領域の設定
         self.canvas.configure(scrollregion=(
@@ -254,14 +304,15 @@ class ImageCropper:
         """画像をキャンバスに描画"""
         scaled_width, scaled_height = scaled_size
         
- 
         # キャンバスの中央位置を計算
         viewport_width = self.canvas.winfo_width()
         viewport_height = self.canvas.winfo_height()
-        x_position = max(0, (viewport_width - scaled_width) // 2)
-        y_position = max(0, (viewport_height - scaled_height) // 2)
         
-        # 画像サイズの白い背景を描画
+        # 必ず中央に配置
+        x_position = (viewport_width - scaled_width) // 2
+        y_position = (viewport_height - scaled_height) // 2
+        
+        # 画像の背景を描画
         self.canvas.create_rectangle(
             x_position, y_position,
             x_position + scaled_width,
@@ -270,11 +321,12 @@ class ImageCropper:
             outline=""
         )
 
-        # 画像を描画
+        # 画像を中央に描画
         self.canvas.create_image(
-            x_position, y_position,
+            viewport_width // 2,
+            viewport_height // 2,
             image=self.photo,
-            anchor="nw"
+            anchor="center"
         )
 
         # 画像の境界を保存
@@ -283,8 +335,8 @@ class ImageCropper:
             'y1': y_position,
             'x2': x_position + scaled_width,
             'y2': y_position + scaled_height,
-            'center_x': x_position + scaled_width // 2,
-            'center_y': y_position + scaled_height // 2
+            'center_x': viewport_width // 2,
+            'center_y': viewport_height // 2
         }
 
     def _restore_selection(self):
@@ -299,7 +351,158 @@ class ImageCropper:
                 y1 + self.rect_height,
                 outline="red"
             )
+    
+    def reset_rotation(self):
+        """回転を0度にリセット"""
+        if not self.pil_image:
+            return
 
+        # 矩形情報を相対位置で保存
+        rect_info = self._save_rect_info()
+        
+        # 回転角度をリセット
+        total_rotation = (self.rotation_angle + self.free_rotation_angle) % 360
+        if total_rotation != 0:
+            # 現在の回転を打ち消す回転を適用
+            self.pil_image = Image.open(self.current_file_path)
+            if self.pil_image.mode != 'RGBA':
+                self.pil_image = self.pil_image.convert('RGBA')
+            
+            self.rotation_angle = 0
+            self.free_rotation_angle = 0
+            self.is_rotating = False  # 回転モードを解除
+            
+            self.display_image()
+            
+            # 矩形を復元
+            if rect_info:
+                self._restore_rect_from_info(rect_info)
+                
+    def flip_horizontal(self):
+        """画像を水平方向に反転"""
+        if not self.pil_image:
+            return
+
+        # 矩形情報を相対位置で保存
+        rect_info = self._save_rect_info()
+        
+        # 画像を水平方向に反転
+        self.pil_image = self.pil_image.transpose(Image.FLIP_LEFT_RIGHT)
+        self.is_flipped = not self.is_flipped
+        
+        self.display_image()
+        
+        # 矩形を復元
+        if rect_info:
+            self._restore_rect_from_info(rect_info)
+            
+    
+    def start_free_rotation(self, event):
+        """フリー回転の開始"""
+        if not self.pil_image:
+            return
+        
+        self.is_rotating = True
+        self.rotation_start_angle = self.free_rotation_angle
+        self.rotation_start_x = event.x
+        # 開始時に元画像を保存
+        self.original_image = Image.open(self.current_file_path)
+        if self.original_image.mode != 'RGBA':
+            self.original_image = self.original_image.convert('RGBA')
+
+    def do_free_rotation(self, event):
+        """フリー回転の実行"""
+        if not self.is_rotating or not self.pil_image:
+            return
+
+        # 前回のタイマーをキャンセル
+        if self.rotation_timer:
+            self.root.after_cancel(self.rotation_timer)
+        
+        # マウスの移動量から回転角度を計算
+        dx = event.x - self.rotation_start_x
+        delta_angle = dx * 0.3
+        
+        # 開始時からの累積角度を計算
+        new_angle = (self.rotation_start_angle + delta_angle) % 360
+        
+        # 新しいタイマーを設定して回転処理を実行
+        self.rotation_timer = self.root.after(5, lambda: self._apply_rotation(new_angle))
+
+    def _apply_rotation(self, angle):
+        """回転を適用する"""
+        if not self.is_rotating:  # 回転モードが終了していたら何もしない
+            return
+
+        self.free_rotation_angle = angle
+        
+        # 矩形情報を保存
+        rect_info = self._save_rect_info()
+        
+        # 元画像から直接回転を適用
+        self.pil_image = self.original_image.rotate(
+            self.free_rotation_angle,
+            expand=True,
+            fillcolor='white',
+            resample=Image.BILINEAR
+        )
+        
+        self.display_image()
+        
+        if rect_info:
+            self._restore_rect_from_info(rect_info)
+        
+        self.rotation_timer = None
+
+    def end_free_rotation(self, event):
+        """フリー回転の終了"""
+        if self.rotation_timer:
+            self.root.after_cancel(self.rotation_timer)
+            self.rotation_timer = None
+        
+        self.is_rotating = False
+        if hasattr(self, 'original_image'):
+            del self.original_image
+            
+    def move_rect(self, direction):
+        """矩形を1ピクセル移動"""
+        if not self.rect_id:
+            return
+        
+        coords = self.canvas.coords(self.rect_id)
+        x1, y1, x2, y2 = coords
+        
+        # 移動量を設定
+        dx = dy = 0
+        if direction == 'left':
+            dx = -1
+        elif direction == 'right':
+            dx = 1
+        elif direction == 'up':
+            dy = -1
+        elif direction == 'down':
+            dy = 1
+        
+        # スケールを考慮した移動量
+        scaled_dx = dx / self.scale
+        scaled_dy = dy / self.scale
+        
+        # 画像の境界をチェック
+        new_x1 = x1 + dx
+        new_y1 = y1 + dy
+        new_x2 = x2 + dx
+        new_y2 = y2 + dy
+        
+        # 境界チェック
+        if (new_x1 >= self.image_bounds['x1'] and 
+            new_x2 <= self.image_bounds['x2'] and 
+            new_y1 >= self.image_bounds['y1'] and 
+            new_y2 <= self.image_bounds['y2']):
+            
+            # 矩形を移動
+            self.canvas.coords(self.rect_id, new_x1, new_y1, new_x2, new_y2)
+            self.current_rect_coords = [new_x1, new_y1]
+                       
     # 矩形選択関連のメソッド
     def on_drag(self, event):
         """マウスドラッグ時の処理"""
@@ -739,7 +942,7 @@ class ImageCropper:
 
         # 矩形情報を相対位置で保存
         rect_info = self._save_rect_info()
-        
+    
         self.rotation_angle = (self.rotation_angle + 90) % 360
         self.pil_image = self.pil_image.rotate(-90, expand=True)
         
