@@ -40,6 +40,9 @@ class ImageCropper:
         self.rotation_start_y = None
         self.free_rotation_angle = 0  # フリー回転用の角度
         self.rotation_timer = None  # 回転処理用のタイマーを追加
+        self.rotation_start_angle = 0 # 回転開始時の角度を追加
+
+
 
         # 左右反転用の変数
         self.is_flipped = False
@@ -371,6 +374,7 @@ class ImageCropper:
             self.rotation_angle = 0
             self.free_rotation_angle = 0
             self.is_rotating = False  # 回転モードを解除
+            self.is_flipped = False   # flip状態をリセット
             
             self.display_image()
             
@@ -399,11 +403,15 @@ class ImageCropper:
     
     def start_free_rotation(self, event):
         """フリー回転の開始"""
-        if not self.pil_image:
-            return
-        
+        current_angle = self.free_rotation_angle  # 代入前の値を保存
         self.is_rotating = True
         self.rotation_start_angle = self.free_rotation_angle
+        after_assign = self.rotation_start_angle  # 代入後の値を確認
+        
+        print(f"Before assignment: {current_angle}")
+        print(f"After assignment: {after_assign}")
+        print(f"Current free_rotation_angle: {self.free_rotation_angle}")
+    
         self.rotation_start_x = event.x
         # 開始時に画像を保存
         self.original_image = self.pil_image.copy()
@@ -411,22 +419,24 @@ class ImageCropper:
             self.original_image = self.original_image.convert('RGBA')
 
     def do_free_rotation(self, event):
-        """フリー回転の実行"""
         if not self.is_rotating or not self.pil_image:
             return
 
-        # 前回のタイマーをキャンセル
         if self.rotation_timer:
             self.root.after_cancel(self.rotation_timer)
         
-        # マウスの移動量から回転角度を計算
         dx = event.x - self.rotation_start_x
         delta_angle = dx * 0.3
         
-        # 開始時からの累積角度を計算
-        new_angle = (self.rotation_start_angle + delta_angle) % 360
+        # デバッグ出力を追加
+        print(f"Debug - rotation_start_angle: {self.rotation_start_angle}")
+        print(f"Debug - delta_angle: {delta_angle}")
         
-        # 新しいタイマーを設定して回転処理を実行
+        new_angle = self.rotation_start_angle + delta_angle
+        new_angle = new_angle % 360
+        
+        print(f"Debug - calculated new_angle: {new_angle}")
+        
         self.rotation_timer = self.root.after(5, lambda: self._apply_rotation(new_angle))
 
     def _apply_rotation(self, angle):
@@ -848,6 +858,7 @@ class ImageCropper:
 
     def _get_cropped_image(self):
         """選択範囲の画像を取得"""
+        print(f"Saving - final free_rotation_angle: {self.free_rotation_angle}")
         if not self.rect_id:
             return None
                 
@@ -856,11 +867,53 @@ class ImageCropper:
         if original_image.mode != 'RGBA':
             original_image = original_image.convert('RGBA')
 
-        # 現在の回転角度を適用（90度回転と自由回転の両方）
-        total_rotation = (self.rotation_angle + self.free_rotation_angle) % 360
-        if total_rotation != 0:
+        # 左右反転の適用
+        if self.is_flipped:
+            original_image = original_image.transpose(Image.FLIP_LEFT_RIGHT)
+
+        # 自由回転を適用
+        if self.free_rotation_angle != 0:
+            import cv2
+            import numpy as np
+            img_array = np.array(original_image)
+            # RGBA → BGRA (OpenCV形式)
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGRA)
+            
+            # 画像の中心を計算
+            height, width = img_array.shape[:2]
+            center = (width/2, height/2)
+            
+            # 回転行列を作成
+            rotation_matrix = cv2.getRotationMatrix2D(center, self.free_rotation_angle, 1.0)
+            
+            # 回転後のサイズを計算
+            abs_cos = abs(rotation_matrix[0,0]) 
+            abs_sin = abs(rotation_matrix[0,1])
+            new_width = int(height * abs_sin + width * abs_cos)
+            new_height = int(height * abs_cos + width * abs_sin)
+            
+            # 移動を調整（中心に配置）
+            rotation_matrix[0, 2] += new_width/2 - center[0]
+            rotation_matrix[1, 2] += new_height/2 - center[1]
+            
+            # 回転を適用（LANCZOS法使用）
+            rotated = cv2.warpAffine(
+                img_array, 
+                rotation_matrix, 
+                (new_width, new_height),
+                flags=cv2.INTER_LANCZOS4,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255, 255)  # 白色で埋める
+            )
+            
+            # OpenCVからPIL形式に戻す
+            rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
+            original_image = Image.fromarray(rotated)
+
+        # 90度回転を適用
+        if self.rotation_angle != 0:
             original_image = original_image.rotate(
-                total_rotation,  # マイナスを外す（時計回りに合わせる）
+                -self.rotation_angle,
                 expand=True,
                 fillcolor='white'
             )
@@ -870,10 +923,20 @@ class ImageCropper:
         
         # 表示用の座標を元画像のサイズに変換
         coords = self.canvas.coords(self.rect_id)
+        
+        print(f"Debug - Original coords: {coords}")
+        print(f"Debug - Image bounds: {self.image_bounds}")
+        print(f"Debug - Scale factor: {scale_factor}")
+        print(f"Debug - Scale: {self.scale}")
+        
+  
         x1 = (coords[0] - self.image_bounds['x1']) / self.scale * scale_factor
         y1 = (coords[1] - self.image_bounds['y1']) / self.scale * scale_factor
         x2 = (coords[2] - self.image_bounds['x1']) / self.scale * scale_factor
         y2 = (coords[3] - self.image_bounds['y1']) / self.scale * scale_factor
+        
+        print(f"Debug - Calculated crop coords: {(x1, y1, x2, y2)}")
+
         
         # 整数に変換
         x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
