@@ -7,6 +7,11 @@ import math
 
 class ImageCropper:
     """画像切り抜きツール"""  
+#--------------------------------------
+#
+#初期化
+#
+#--------------------------------------
     def __init__(self, root):
         self.root = root
         self.root.title("Image Cropper")
@@ -14,7 +19,6 @@ class ImageCropper:
         self._setup_ui()
         self._setup_bindings()
         
-
     def _init_variables(self):
         """変数の初期化"""
         # 基本設定
@@ -198,8 +202,6 @@ class ImageCropper:
         self.last_width = self.root.winfo_width()
         self.last_height = self.root.winfo_height()
 
- 
-
     def _setup_bindings(self):
         """イベントバインディングの設定"""
         # キャンバスイベント
@@ -247,8 +249,13 @@ class ImageCropper:
         # ウィンドウサイズを記録
         self.last_width = self.root.winfo_width()
         self.last_height = self.root.winfo_height()
-            
-    # 画像表示関連のメソッド
+#--------------------------------------
+#
+#画像表示関連のメソッド
+#
+#--------------------------------------
+
+    #画像表示
     def display_image(self):
         """画像の表示処理"""
         if self.pil_image is None:
@@ -267,7 +274,6 @@ class ImageCropper:
         # 矩形を中央基準で復元
         self._restore_rect_from_info(rect_info)
         self._update_size_labels()
-
 
     def _calculate_scaled_size(self):
         """スケールされたサイズを計算"""
@@ -356,7 +362,7 @@ class ImageCropper:
             )
     
     def reset_rotation(self):
-        """回転を0度にリセット"""
+        """回転をリセット"""
         if not self.pil_image:
             return
 
@@ -364,23 +370,25 @@ class ImageCropper:
         rect_info = self._save_rect_info()
         
         # 回転角度をリセット
-        total_rotation = (self.rotation_angle + self.free_rotation_angle) % 360
-        if total_rotation != 0:
-            # 現在の回転を打ち消す回転を適用
-            self.pil_image = Image.open(self.current_file_path)
-            if self.pil_image.mode != 'RGBA':
-                self.pil_image = self.pil_image.convert('RGBA')
-            
-            self.rotation_angle = 0
-            self.free_rotation_angle = 0
-            self.is_rotating = False  # 回転モードを解除
-            self.is_flipped = False   # flip状態をリセット
-            
-            self.display_image()
-            
-            # 矩形を復元
-            if rect_info:
-                self._restore_rect_from_info(rect_info)
+        self.rotation_angle = 0
+        self.free_rotation_angle = 0
+        self.is_rotating = False
+        self.is_flipped = False
+        
+        # 表示用の元画像もリセット
+        if hasattr(self, 'original_display_image'):
+            del self.original_display_image
+        
+        # 現在の回転を打ち消す回転を適用
+        self.pil_image = Image.open(self.current_file_path)
+        if self.pil_image.mode != 'RGBA':
+            self.pil_image = self.pil_image.convert('RGBA')
+        
+        self.display_image()
+        
+        # 矩形を復元
+        if rect_info:
+            self._restore_rect_from_info(rect_info)
                 
     def flip_horizontal(self):
         """画像を水平方向に反転"""
@@ -400,61 +408,58 @@ class ImageCropper:
         if rect_info:
             self._restore_rect_from_info(rect_info)
             
-    
     def start_free_rotation(self, event):
         """フリー回転の開始"""
-        current_angle = self.free_rotation_angle  # 代入前の値を保存
         self.is_rotating = True
-        self.rotation_start_angle = self.free_rotation_angle
-        after_assign = self.rotation_start_angle  # 代入後の値を確認
-        
-        print(f"Before assignment: {current_angle}")
-        print(f"After assignment: {after_assign}")
-        print(f"Current free_rotation_angle: {self.free_rotation_angle}")
-    
         self.rotation_start_x = event.x
-        # 開始時に画像を保存
-        self.original_image = self.pil_image.copy()
-        if self.original_image.mode != 'RGBA':
-            self.original_image = self.original_image.convert('RGBA')
+        # 開始時の累積角度を保存
+        self.rotation_start_angle = self.free_rotation_angle
+        
+        # 表示用の画像をクリーンな状態で作成
+        if not hasattr(self, 'original_display_image'):
+            # 初回のみ表示用の元画像を保存
+            self.original_display_image = self.pil_image.copy()
+        
+        # 現在の表示用画像をバックアップ
+        self.rotation_backup_image = self.original_display_image.copy()
 
     def do_free_rotation(self, event):
+        """フリー回転の実行"""
         if not self.is_rotating or not self.pil_image:
             return
 
         if self.rotation_timer:
             self.root.after_cancel(self.rotation_timer)
+            self.rotation_timer = None
         
         dx = event.x - self.rotation_start_x
         delta_angle = dx * 0.3
         
-        # デバッグ出力を追加
-        print(f"Debug - rotation_start_angle: {self.rotation_start_angle}")
-        print(f"Debug - delta_angle: {delta_angle}")
-        
-        new_angle = self.rotation_start_angle + delta_angle
-        new_angle = new_angle % 360
-        
-        print(f"Debug - calculated new_angle: {new_angle}")
+        # 開始時の角度を基準に新しい角度を計算
+        new_angle = (self.rotation_start_angle + delta_angle) % 360
+        print(f"開始角度: {self.rotation_start_angle}, 変化量: {delta_angle}, 新角度: {new_angle}")
         
         self.rotation_timer = self.root.after(5, lambda: self._apply_rotation(new_angle))
 
     def _apply_rotation(self, angle):
-        """回転を適用する"""
-        if not self.is_rotating:  # 回転モードが終了していたら何もしない
+        """回転を適用する（表示用）"""
+        if not self.is_rotating:
             return
 
+        # 絶対角度として保存（この角度は後で保存時に使用）
         self.free_rotation_angle = angle
         
         # 矩形情報を保存
         rect_info = self._save_rect_info()
         
-        # 元画像から直接回転を適用
-        self.pil_image = self.original_image.rotate(
-            self.free_rotation_angle,
+        # バックアップ画像から新しい角度で回転（表示用）
+        if hasattr(self, 'pil_image'):
+            del self.pil_image
+        self.pil_image = self.rotation_backup_image.rotate(
+            angle,
             expand=True,
-            fillcolor='white',
-            resample=Image.BILINEAR
+            resample=Image.BILINEAR,
+            fillcolor='white'
         )
         
         self.display_image()
@@ -471,8 +476,12 @@ class ImageCropper:
             self.rotation_timer = None
         
         self.is_rotating = False
-        if hasattr(self, 'original_image'):
-            del self.original_image
+        
+        # 回転操作終了時にバックアップを解放
+        if hasattr(self, 'rotation_backup_image'):
+            del self.rotation_backup_image
+        
+        print(f"回転終了時の累積角度: {self.free_rotation_angle}")
             
     def move_rect(self, direction):
         """矩形を1ピクセル移動"""
@@ -609,6 +618,7 @@ class ImageCropper:
         
         new_position = self._calculate_new_position(event, width, height)
         self._update_rect_position(new_position, width, height)
+
     def _handle_rect_resize(self, event):
         """矩形のリサイズ処理"""
         if not self.rect_id or not self.start_coords:
@@ -857,17 +867,15 @@ class ImageCropper:
                 len(self.canvas.coords(self.rect_id)) == 4)
 
     def _get_cropped_image(self):
-        """選択範囲の画像を取得"""
-        print(f"Saving - final free_rotation_angle: {self.free_rotation_angle}")
+        """選択範囲の画像を取得（保存用）"""
         if not self.rect_id:
             return None
-                
-        # 元の画像を読み込み
+        
+        # 元画像を読み込んで回転を適用
         original_image = Image.open(self.current_file_path)
         if original_image.mode != 'RGBA':
             original_image = original_image.convert('RGBA')
 
-        # 左右反転の適用
         if self.is_flipped:
             original_image = original_image.transpose(Image.FLIP_LEFT_RIGHT)
 
@@ -875,38 +883,34 @@ class ImageCropper:
         if self.free_rotation_angle != 0:
             import cv2
             import numpy as np
+            
             img_array = np.array(original_image)
-            # RGBA → BGRA (OpenCV形式)
             img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGRA)
             
-            # 画像の中心を計算
+            print(f"保存時の回転角度: {self.free_rotation_angle}")
             height, width = img_array.shape[:2]
             center = (width/2, height/2)
             
-            # 回転行列を作成
+            # 累積された最終角度で回転を適用
             rotation_matrix = cv2.getRotationMatrix2D(center, self.free_rotation_angle, 1.0)
             
-            # 回転後のサイズを計算
-            abs_cos = abs(rotation_matrix[0,0]) 
+            abs_cos = abs(rotation_matrix[0,0])
             abs_sin = abs(rotation_matrix[0,1])
             new_width = int(height * abs_sin + width * abs_cos)
             new_height = int(height * abs_cos + width * abs_sin)
             
-            # 移動を調整（中心に配置）
             rotation_matrix[0, 2] += new_width/2 - center[0]
             rotation_matrix[1, 2] += new_height/2 - center[1]
             
-            # 回転を適用（LANCZOS法使用）
             rotated = cv2.warpAffine(
-                img_array, 
-                rotation_matrix, 
+                img_array,
+                rotation_matrix,
                 (new_width, new_height),
                 flags=cv2.INTER_LANCZOS4,
                 borderMode=cv2.BORDER_CONSTANT,
-                borderValue=(255, 255, 255, 255)  # 白色で埋める
+                borderValue=(255, 255, 255, 255)
             )
             
-            # OpenCVからPIL形式に戻す
             rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
             original_image = Image.fromarray(rotated)
 
@@ -918,27 +922,15 @@ class ImageCropper:
                 fillcolor='white'
             )
 
-        # 表示用画像と元画像のサイズ比を計算
+        # スケール計算と座標変換
         scale_factor = original_image.size[0] / self.pil_image.size[0]
-        
-        # 表示用の座標を元画像のサイズに変換
         coords = self.canvas.coords(self.rect_id)
         
-        print(f"Debug - Original coords: {coords}")
-        print(f"Debug - Image bounds: {self.image_bounds}")
-        print(f"Debug - Scale factor: {scale_factor}")
-        print(f"Debug - Scale: {self.scale}")
-        
-  
         x1 = (coords[0] - self.image_bounds['x1']) / self.scale * scale_factor
         y1 = (coords[1] - self.image_bounds['y1']) / self.scale * scale_factor
         x2 = (coords[2] - self.image_bounds['x1']) / self.scale * scale_factor
         y2 = (coords[3] - self.image_bounds['y1']) / self.scale * scale_factor
         
-        print(f"Debug - Calculated crop coords: {(x1, y1, x2, y2)}")
-
-        
-        # 整数に変換
         x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
         
         return original_image.crop((x1, y1, x2, y2))
