@@ -398,16 +398,34 @@ class ImageCropper:
         # 矩形情報を相対位置で保存
         rect_info = self._save_rect_info()
         
-        # 画像を水平方向に反転
-        self.pil_image = self.pil_image.transpose(Image.FLIP_LEFT_RIGHT)
+        # 現在の角度を保存
+        current_angle = self.free_rotation_angle
+        
+        # 反転フラグを更新
         self.is_flipped = not self.is_flipped
+        
+        # 表示用の画像を反転
+        self.pil_image = self.pil_image.transpose(Image.FLIP_LEFT_RIGHT)
+        
+
+        # 回転がある場合は再適用
+        if current_angle != 0:
+            # original_display_imageも反転（フリー回転のため）
+            self.original_display_image = self.original_display_image.transpose(Image.FLIP_LEFT_RIGHT)
+            self.pil_image = self.original_display_image.copy()
+            self.pil_image = self.pil_image.rotate(
+                current_angle,
+                expand=True,
+                resample=Image.BILINEAR,
+                fillcolor='white'
+            )
         
         self.display_image()
         
         # 矩形を復元
         if rect_info:
             self._restore_rect_from_info(rect_info)
-            
+        
     def start_free_rotation(self, event):
         """フリー回転の開始"""
         self.is_rotating = True
