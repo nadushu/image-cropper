@@ -1041,16 +1041,22 @@ class ImageCropper:
 
         # 矩形情報を相対位置で保存
         rect_info = self._save_rect_info()
-    
+        
+        # 回転角度を更新
         self.rotation_angle = (self.rotation_angle + 90) % 360
+        
+        # フリー回転の基準となる画像も90度回転させる
+        if hasattr(self, 'original_display_image'):
+            self.original_display_image = self.original_display_image.rotate(-90, expand=True)
+        
+        # 現在の表示画像を回転
         self.pil_image = self.pil_image.rotate(-90, expand=True)
         
         self.display_image()
         
-        # 矩形を中央基準で復元
+        # 矩形を復元
         if rect_info:
             self._restore_rect_from_info(rect_info)
-            self._update_size_labels()
     
     def _reset_selection(self):
         """選択範囲をリセット"""
