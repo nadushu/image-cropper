@@ -69,13 +69,25 @@ class ImageCropper:
 
 
         
-        # クロップモード設定
+        # クロップモード設定を更新
         self.crop_modes = {
-            "1:1": (1, 1),
-            "1216:832": (1216, 832),
-            "832:1216": (832, 1216)
+            "1024:1024": [(1024, 1024)],
+            "832/1216": [
+                (1216, 832),   # 横長モード
+                (832, 1216)    # 縦長モード
+            ],
+            "768/1344": [
+                (1344, 768),   # 横長モード
+                (768, 1344)    # 縦長モード
+            ],
+            "896/1152": [
+                (1152, 896),   # 横長モード
+                (896, 1152)    # 縦長モード
+            ]
         }
-        self.current_mode = "1:1"
+        # 各モードの現在のインデックスを保持
+        self.mode_indices = {mode: 0 for mode in self.crop_modes}
+        self.current_mode = "1024:1024"
 
     def _setup_ui(self):
         """UIコンポーネントの設定"""
@@ -184,12 +196,12 @@ class ImageCropper:
         self.fixed_size_button.pack(side=tk.LEFT, padx=5, pady=5)
         
         # モードボタン（順番を指定）
-        mode_order = ["1:1", "1216:832", "832:1216"]
+        mode_order = ["1024:1024", "832/1216", "768/1344", "896/1152"]
         self.mode_buttons = {}
         for mode in mode_order:
             btn = tk.Button(
                 self.button_frame,
-                text=mode,
+                text=self._get_mode_display_text(mode),
                 command=lambda m=mode: self.change_mode(m)
             )
             btn.pack(side=tk.LEFT, padx=5, pady=5)
@@ -201,6 +213,11 @@ class ImageCropper:
         # 初期ウィンドウサイズを記録
         self.last_width = self.root.winfo_width()
         self.last_height = self.root.winfo_height()
+        
+    def _get_mode_display_text(self, mode):
+        """モードの表示テキストを取得"""
+        current_size = self.crop_modes[mode][self.mode_indices[mode]]
+        return f"{current_size[0]}x{current_size[1]}"
 
     def _setup_bindings(self):
         """イベントバインディングの設定"""
@@ -398,16 +415,34 @@ class ImageCropper:
         # 矩形情報を相対位置で保存
         rect_info = self._save_rect_info()
         
-        # 画像を水平方向に反転
-        self.pil_image = self.pil_image.transpose(Image.FLIP_LEFT_RIGHT)
+        # 現在の角度を保存
+        current_angle = self.free_rotation_angle
+        
+        # 反転フラグを更新
         self.is_flipped = not self.is_flipped
+        
+        # 表示用の画像を反転
+        self.pil_image = self.pil_image.transpose(Image.FLIP_LEFT_RIGHT)
+        
+
+        # 回転がある場合は再適用
+        if current_angle != 0:
+            # original_display_imageも反転（フリー回転のため）
+            self.original_display_image = self.original_display_image.transpose(Image.FLIP_LEFT_RIGHT)
+            self.pil_image = self.original_display_image.copy()
+            self.pil_image = self.pil_image.rotate(
+                current_angle,
+                expand=True,
+                resample=Image.BILINEAR,
+                fillcolor='white'
+            )
         
         self.display_image()
         
         # 矩形を復元
         if rect_info:
             self._restore_rect_from_info(rect_info)
-            
+        
     def start_free_rotation(self, event):
         """フリー回転の開始"""
         self.is_rotating = True
@@ -550,7 +585,7 @@ class ImageCropper:
         self.last_drag_x = event.x  # X座標も保存
         # 現在の矩形の座標を保存
         self.start_coords = self.canvas.coords(self.rect_id)
-
+        
     def on_right_drag(self, event):
         """右クリックドラッグ時の処理（矩形のリサイズ）"""
         if not (self.is_right_dragging and self.last_drag_y is not None and self.rect_id):
@@ -559,54 +594,81 @@ class ImageCropper:
         # Y座標とX座標の移動量から拡大縮小率を決定
         delta_y = self.last_drag_y - event.y
         delta_x = event.x - self.last_drag_x  # X方向の移動量（右が正）
+        
         if delta_y != 0 or delta_x != 0:
-            ratio_w, ratio_h = self.crop_modes[self.current_mode]
             coords = self.canvas.coords(self.rect_id)
-            center_x = (coords[0] + coords[2]) / 2
-            center_y = (coords[1] + coords[3]) / 2
+            current_center_x = (coords[0] + coords[2]) / 2
+            current_center_y = (coords[1] + coords[3]) / 2
 
             # 現在のサイズを取得
             current_width = coords[2] - coords[0]
-            
+            current_height = coords[3] - coords[1]
+
             # 上下と左右の移動量を組み合わせて倍率を計算
             scale_factor = 1.0
             if abs(delta_y) > abs(delta_x):
-                # 上下の移動が大きい場合
                 scale_factor *= (1.0 + (delta_y / 200.0))
             else:
-                # 左右の移動が大きい場合
                 scale_factor *= (1.0 + (delta_x / 200.0))
 
-            # 新しいサイズを計算
+            # 新しいサイズを計算（アスペクト比を維持）
             new_width = current_width * scale_factor
-            if ratio_w == ratio_h:
-                new_height = new_width
-            else:
-                new_height = (new_width * ratio_h) / ratio_w
+            new_height = current_height * scale_factor
 
-            # 中心点から新しい座標を計算
-            x1 = center_x - new_width / 2
-            y1 = center_y - new_height / 2
-            x2 = center_x + new_width / 2
-            y2 = center_y + new_height / 2
+            # 最小サイズを制限
+            min_size = 10 * self.scale
+            if new_width < min_size:
+                scale_factor = min_size / current_width
+            if new_height < min_size:
+                scale_factor = min_size / current_height
+            new_width = current_width * scale_factor
+            new_height = current_height * scale_factor
 
-            # 画像の範囲内に制限
-            x1 = max(self.image_bounds['x1'], min(x1, self.image_bounds['x2']))
-            y1 = max(self.image_bounds['y1'], min(y1, self.image_bounds['y2']))
-            x2 = max(self.image_bounds['x1'], min(x2, self.image_bounds['x2']))
-            y2 = max(self.image_bounds['y1'], min(y2, self.image_bounds['y2']))
+            # 初期の中心点から新しい座標を計算
+            x1 = current_center_x - new_width / 2
+            y1 = current_center_y - new_height / 2
+            x2 = current_center_x + new_width / 2
+            y2 = current_center_y + new_height / 2
 
-            # 矩形を更新
-            self.canvas.coords(self.rect_id, x1, y1, x2, y2)
-            self.current_rect_coords = [x1, y1]
-            self.rect_width = x2 - x1
-            self.rect_height = y2 - y1
-            
-            # サイズ表示を更新
-            self._update_size_labels()
+            # 境界チェックと中心点の調整
+            if x1 < self.image_bounds['x1']:
+                # 左境界に接触
+                shift_x = self.image_bounds['x1'] - x1
+                x1 += shift_x
+                x2 += shift_x
+                current_center_x += shift_x
+            elif x2 > self.image_bounds['x2']:
+                # 右境界に接触
+                shift_x = self.image_bounds['x2'] - x2
+                x1 += shift_x
+                x2 += shift_x
+                current_center_x += shift_x
+
+            if y1 < self.image_bounds['y1']:
+                # 上境界に接触
+                shift_y = self.image_bounds['y1'] - y1
+                y1 += shift_y
+                y2 += shift_y
+                current_center_y += shift_y
+            elif y2 > self.image_bounds['y2']:
+                # 下境界に接触
+                shift_y = self.image_bounds['y2'] - y2
+                y1 += shift_y
+                y2 += shift_y
+                current_center_y += shift_y
+
+            # 最終的な境界チェック
+            if (x2 - x1) >= min_size and (y2 - y1) >= min_size and \
+            x1 >= self.image_bounds['x1'] and x2 <= self.image_bounds['x2'] and \
+            y1 >= self.image_bounds['y1'] and y2 <= self.image_bounds['y2']:
+                # 矩形を更新
+                self.canvas.coords(self.rect_id, x1, y1, x2, y2)
+                self.current_rect_coords = [x1, y1]
+                self.rect_width = x2 - x1
+                self.rect_height = y2 - y1
 
         self.last_drag_y = event.y
-        self.last_drag_x = event.x  # X座標も更新
+        self.last_drag_x = event.x
 
     def on_right_release(self, event):
         """右クリック解放時の処理"""
@@ -722,11 +784,11 @@ class ImageCropper:
 
     def _calculate_rect_dimensions(self, pos):
         """矩形のサイズと位置を計算"""
-        ratio_w, ratio_h = self.crop_modes[self.current_mode]
+        current_size = self.crop_modes[self.current_mode][self.mode_indices[self.current_mode]]
+        ratio_w, ratio_h = current_size  # 現在のモードのサイズを取得
         event_x, event_y = pos
         
-        if ratio_w == ratio_h:
-            # 1:1の場合
+        if ratio_w == ratio_h:  # 1:1の場合
             width = height = min(abs(event_x - self.start_x),
                             abs(event_y - self.start_y))
         else:
@@ -838,29 +900,21 @@ class ImageCropper:
             return
 
         cropped_image = self._get_cropped_image()
-        if cropped_image and (self.resize_save_mode or force_resize):
-            # モードに応じたサイズを取得
-            ratio_w, ratio_h = self.crop_modes[self.current_mode]
-            if self.current_mode == "1:1":
-                target_width = target_height = 1024
-            else:
-                if ratio_w > ratio_h:  # 横長
-                    target_width = 1216
-                    target_height = 832
-                else:  # 縦長
-                    target_width = 832
-                    target_height = 1216
+        if cropped_image:
+            # 現在のモードのサイズを取得
+            current_size = self.crop_modes[self.current_mode][self.mode_indices[self.current_mode]]
+            target_width, target_height = current_size
 
             # 現在のサイズを確認
             current_width, current_height = cropped_image.size
-            # サイズが既に目標と同じ場合はリサイズしない
+            
+            # サイズが異なる場合は必ずリサイズ (force_resizeやresize_save_modeに関係なく)
             if current_width != target_width or current_height != target_height:
                 cropped_image = cropped_image.resize(
                     (target_width, target_height),
                     Image.Resampling.LANCZOS
                 )
 
-        if cropped_image:
             self._save_image(cropped_image)
 
     def _can_save(self):
@@ -879,11 +933,48 @@ class ImageCropper:
         if original_image.mode != 'RGBA':
             original_image = original_image.convert('RGBA')
 
-        # 現在の回転角度を適用（90度回転と自由回転の両方）
-        total_rotation = (self.rotation_angle + self.free_rotation_angle) % 360
-        if total_rotation != 0:
+        if self.is_flipped:
+            original_image = original_image.transpose(Image.FLIP_LEFT_RIGHT)
+
+        # 自由回転を適用
+        if self.free_rotation_angle != 0:
+            import cv2
+            import numpy as np
+            
+            img_array = np.array(original_image)
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGRA)
+            
+            print(f"保存時の回転角度: {self.free_rotation_angle}")
+            height, width = img_array.shape[:2]
+            center = (width/2, height/2)
+            
+            # 累積された最終角度で回転を適用
+            rotation_matrix = cv2.getRotationMatrix2D(center, self.free_rotation_angle, 1.0)
+            
+            abs_cos = abs(rotation_matrix[0,0])
+            abs_sin = abs(rotation_matrix[0,1])
+            new_width = int(height * abs_sin + width * abs_cos)
+            new_height = int(height * abs_cos + width * abs_sin)
+            
+            rotation_matrix[0, 2] += new_width/2 - center[0]
+            rotation_matrix[1, 2] += new_height/2 - center[1]
+            
+            rotated = cv2.warpAffine(
+                img_array,
+                rotation_matrix,
+                (new_width, new_height),
+                flags=cv2.INTER_LANCZOS4,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255, 255)
+            )
+            
+            rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
+            original_image = Image.fromarray(rotated)
+
+        # 90度回転を適用
+        if self.rotation_angle != 0:
             original_image = original_image.rotate(
-                total_rotation,  # マイナスを外す（時計回りに合わせる）
+                -self.rotation_angle,
                 expand=True,
                 fillcolor='white'
             )
@@ -1073,56 +1164,36 @@ class ImageCropper:
         if not self._can_create_fixed_rect():
             return
 
-        # 画像のサイズを取得
-        img_width = self.pil_image.size[0]
-        img_height = self.pil_image.size[1]
+        # 現在のモードのサイズを取得
+        current_size = self.crop_modes[self.current_mode][self.mode_indices[self.current_mode]]
+        target_width, target_height = current_size
 
-        # 目標サイズを取得
-        target_size = self._calculate_fixed_rect_dimensions()
-        rect_width = target_size['width']   # 1024 or 1216/832
-        rect_height = target_size['height'] # 1024 or 832/1216
-
-        # 画像サイズと目標サイズの差分を計算
-        width_diff = img_width - rect_width
-        height_diff = img_height - rect_height
-
-        # クリック位置が指定されていない場合は中央に配置
-        if x is None or y is None:
-            # 中央配置のための開始位置を計算（整数の除算）
-            image_x1 = width_diff // 2
-            image_y1 = height_diff // 2
+        # 画像の実サイズを取得
+        img_width, img_height = self.pil_image.size
+        
+        # クリック位置を画像座標に変換
+        if x is not None and y is not None:
+            image_x = (x - self.image_bounds['x1']) / self.scale
+            image_y = (y - self.image_bounds['y1']) / self.scale
         else:
-            # クリック位置を画像座標に変換
-            click_x = int((x - self.image_bounds['x1']) / self.scale)
-            click_y = int((y - self.image_bounds['y1']) / self.scale)
-            
-            # クリック位置を中心とした開始位置を計算
-            image_x1 = click_x - (rect_width // 2)
-            image_y1 = click_y - (rect_height // 2)
+            # クリック位置が指定されていない場合は中央
+            image_x = img_width / 2
+            image_y = img_height / 2
 
-            # 画像の範囲内に収める
-            image_x1 = max(0, min(image_x1, width_diff))
-            image_y1 = max(0, min(image_y1, height_diff))
+        # 指定したサイズで割り切れるように補正
+        # target_widthとtarget_heightを直接グリッドサイズとして使用
+        image_x = ((image_x - (target_width / 2)) // target_width) * target_width
+        image_y = ((image_y - (target_height / 2)) // target_height) * target_height
 
-        # サイズの補正（1024/832/1216で割り切れるようにする）
-        if self.current_mode == "1:1":
-            # 1024で割り切れるように調整
-            image_x1 = (image_x1 // 1024) * 1024
-            image_y1 = (image_y1 // 1024) * 1024
-        else:
-            ratio_w, ratio_h = self.crop_modes[self.current_mode]
-            if ratio_w > ratio_h:  # 横長
-                image_x1 = (image_x1 // 1216) * 1216
-                image_y1 = (image_y1 // 832) * 832
-            else:  # 縦長
-                image_x1 = (image_x1 // 832) * 832
-                image_y1 = (image_y1 // 1216) * 1216
+        # 画像の範囲内に収める
+        image_x = max(0, min(image_x, img_width - target_width))
+        image_y = max(0, min(image_y, img_height - target_height))
 
         # キャンバス座標に変換
-        canvas_x1 = self.image_bounds['x1'] + (image_x1 * self.scale)
-        canvas_y1 = self.image_bounds['y1'] + (image_y1 * self.scale)
-        canvas_x2 = canvas_x1 + (rect_width * self.scale)
-        canvas_y2 = canvas_y1 + (rect_height * self.scale)
+        canvas_x1 = self.image_bounds['x1'] + (image_x * self.scale)
+        canvas_y1 = self.image_bounds['y1'] + (image_y * self.scale)
+        canvas_x2 = canvas_x1 + (target_width * self.scale)
+        canvas_y2 = canvas_y1 + (target_height * self.scale)
 
         # 矩形を作成
         self._create_rect(canvas_x1, canvas_y1, canvas_x2, canvas_y2)
@@ -1144,20 +1215,10 @@ class ImageCropper:
 
     def _calculate_fixed_rect_dimensions(self):
         """固定サイズ矩形の寸法を計算"""
-        if self.current_mode == "1:1":
-            self.target_width = self.target_height = 1024
-        else:
-            if self.crop_modes[self.current_mode][0] > self.crop_modes[self.current_mode][1]:  # 横長
-                self.target_width = 1216
-                self.target_height = 832
-            else:  # 縦長
-                self.target_width = 832
-                self.target_height = 1216
-        
-        # 固定サイズを直接返す
+        current_size = self.crop_modes[self.current_mode][self.mode_indices[self.current_mode]]
         return {
-            'width': self.target_width,
-            'height': self.target_height
+            'width': current_size[0],
+            'height': current_size[1]
         }
 
     def _adjust_rect_position(self, center, dimensions):
@@ -1184,28 +1245,35 @@ class ImageCropper:
     # モード切替関連のメソッド
     def change_mode(self, mode):
         """クロップモードを変更"""
-        self.current_mode = mode
+        if mode == self.current_mode:
+            # 同じモードがクリックされた場合、インデックスを進める
+            self.mode_indices[mode] = (self.mode_indices[mode] + 1) % len(self.crop_modes[mode])
+        else:
+            # 異なるモードの場合、モードを切り替え
+            self.current_mode = mode
+
         self._update_mode_display()
         self._handle_mode_change()
 
     def _update_mode_display(self):
         """モードの表示を更新"""
         for mode, button in self.mode_buttons.items():
+            # ボタンのテキストを更新
+            button.config(text=self._get_mode_display_text(mode))
+            
             if mode == self.current_mode:
                 # 選択中のモード
                 button.config(
-                    text=mode,
-                    bg='green',  # 背景色を緑に
-                    fg='white',  # 文字色を白に
-                    font=('TkDefaultFont', 9, 'bold')  # フォントを太字に
+                    bg='green',
+                    fg='white',
+                    font=('TkDefaultFont', 9, 'bold')
                 )
             else:
                 # 非選択のモード
                 button.config(
-                    text=mode,
-                    bg='SystemButtonFace',  # デフォルトの背景色
-                    fg='black',  # デフォルトの文字色
-                    font=('TkDefaultFont', 9, 'normal')  # 通常のフォント
+                    bg='SystemButtonFace',
+                    fg='black',
+                    font=('TkDefaultFont', 9, 'normal')
                 )
     
     def _handle_mode_change(self):
