@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox,colorchooser
 from PIL import Image, ImageTk
 import os
 from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -46,8 +46,6 @@ class ImageCropper:
         self.rotation_timer = None  # 回転処理用のタイマーを追加
         self.rotation_start_angle = 0 # 回転開始時の角度を追加
 
-
-
         # 左右反転用の変数
         self.is_flipped = False
         
@@ -66,6 +64,11 @@ class ImageCropper:
         self.is_right_dragging = False  # 右クリックドラッグ状態の管理
         self.last_drag_y = None        # 前回のドラッグY座標
         self.last_drag_x = None  # X座標用の変数を追加
+        
+        # 既存の初期化コードの後に追加
+        self.bg_color = (255, 255, 255, 255)  # RGBAタプル
+        self.bg_color_hex = "#FFFFFF"  # 16進数表現
+        self.batch_processor = None
 
 
         
@@ -213,6 +216,58 @@ class ImageCropper:
         # 初期ウィンドウサイズを記録
         self.last_width = self.root.winfo_width()
         self.last_height = self.root.winfo_height()
+        
+        # 背景色設定
+        bg_frame = ttk.Frame(self.button_frame)
+        bg_frame.pack(side=tk.LEFT, padx=5, pady=5)
+
+        ttk.Label(bg_frame, text="背景色:").pack(side=tk.LEFT)
+        self.color_preview = tk.Frame(bg_frame, width=30, height=20, relief="solid", borderwidth=1)
+        self.color_preview.pack(side=tk.LEFT, padx=5)
+        self.color_preview.configure(bg=self.bg_color_hex)
+
+        ttk.Button(bg_frame, text="色選択", 
+                command=self.choose_color).pack(side=tk.LEFT, padx=5)
+
+        self.use_transparent = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bg_frame, text="透明背景を使用", 
+                    variable=self.use_transparent,
+                    command=self.on_transparent_change).pack(side=tk.LEFT, padx=10)
+
+        self.batch_button = tk.Button(
+        self.button_frame,
+        text="一括処理",
+        command=self.show_batch_processor)
+        self.batch_button.pack(side=tk.LEFT, padx=5, pady=5)
+        
+    def show_batch_processor(self):
+        """バッチ処理ウィンドウを表示"""
+        if self.batch_processor is None:
+            from batch_processor import BatchProcessor
+            self.batch_processor = BatchProcessor(self)
+        self.batch_processor.show_window()
+        
+    def choose_color(self):
+        """統一されたカラーピッカー"""
+        if not self.use_transparent.get():
+            color = colorchooser.askcolor(
+                color=self.bg_color_hex,
+                title="背景色を選択"
+            )
+            if color[1]:
+                self.bg_color_hex = color[1]
+                self.bg_color = (*[int(color[0][i]) for i in range(3)], 255)
+                self.color_preview.configure(bg=color[1])
+
+    def on_transparent_change(self):
+        """透明背景の切り替え処理"""
+        if self.use_transparent.get():
+            self.color_preview.configure(bg='white')  # 透明を表現するために白にする
+            self.bg_color = (0, 0, 0, 0)
+        else:
+            self.color_preview.configure(bg=self.bg_color_hex)
+            r, g, b = [int(self.bg_color_hex[i:i+2], 16) for i in (1, 3, 5)]
+            self.bg_color = (r, g, b, 255)
         
     def _get_mode_display_text(self, mode):
         """モードの表示テキストを取得"""
@@ -1556,7 +1611,7 @@ class ImageCropper:
     
 if __name__ == "__main__":
     root = TkinterDnD.Tk()
-    root.geometry("1050x1050")  # デフォルトサイズを1050x1050に
+    root.geometry("1250x1050")  # デフォルトサイズを1050x1050に
     root.minsize(1050, 1050)    # 最小サイズも1050x1050に
     app = ImageCropper(root)
     root.mainloop()

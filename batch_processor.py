@@ -1,8 +1,7 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, colorchooser, messagebox
 import os
 from PIL import Image, ImageOps
-import math
-import tkinter as tk
-from tkinter import filedialog, ttk, messagebox,colorchooser
 from enum import Enum, auto
 
 
@@ -39,16 +38,14 @@ class ProcessStatus:
         self.is_running = False
         self.should_stop = False
 
-class ImageProcessor:
-    def __init__(self):
+class BatchProcessor:
+    def __init__(self, image_cropper=None):
         self.process_status = ProcessStatus()
-        self.setup_gui()
+        self.image_cropper = image_cropper
+        self.root = None
 
     def setup_gui(self):
         """GUIの設定"""
-        self.root = tk.Tk() 
-        self.root.title("Image Processor")
-        self.root.geometry("600x500")  # ウィンドウサイズを少し大きくして新しい要素を収める
 
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -431,10 +428,30 @@ class ImageProcessor:
     def run(self):
         """アプリケーションの実行"""
         self.root.mainloop()
+        
+    def show_window(self):
+        """バッチ処理ウィンドウを表示"""
+        if self.root is None:
+            self.root = tk.Toplevel() if self.image_cropper else tk.Tk()
+            self.root.title("一括画像処理")
+            self.root.geometry("600x500")  # ウィンドウサイズを少し大きくして新しい要素を収める
+            self.setup_gui()
+            
+            # メインウィンドウとの連携
+            if self.image_cropper:
+                # ImageCropperの背景色設定を引き継ぐ
+                self.bg_color.set(self.image_cropper.bg_color_hex)
+                self.use_transparent.set(
+                    self.image_cropper.bg_color[3] == 0
+                )
+        else:
+            self.root.lift()
 
 def main():
-    processor = ImageProcessor()
-    processor.run()
+    processor = BatchProcessor()  # ImageProcessor から BatchProcessor に修正
+    processor.show_window()  # run() から show_window() に変更
+    if processor.root:  # rootウィンドウが作成された場合のみmainloopを実行
+        processor.root.mainloop()
 
 if __name__ == "__main__":
     main()
