@@ -3,6 +3,8 @@ from tkinter import ttk, filedialog, colorchooser, messagebox
 import os
 from PIL import Image, ImageOps
 from enum import Enum, auto
+import concurrent.futures
+import threading
 
 
 # 定数定義
@@ -43,10 +45,11 @@ class BatchProcessor:
         self.process_status = ProcessStatus()
         self.image_cropper = image_cropper
         self.root = None
+        self.pil_lock = threading.Lock()  # ロック追加
+
 
     def setup_gui(self):
         """GUIの設定"""
-
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
@@ -67,9 +70,18 @@ class BatchProcessor:
         ttk.Radiobutton(resize_frame, text="フィット", value="FIT", 
                         variable=self.resize_mode).grid(row=0, column=1, padx=5)
 
+        # 出力サイズ選択
+        ttk.Label(main_frame, text="出力サイズ:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.output_size = tk.StringVar(value="AUTO")
+        size_options = ["AUTO"] + [f"{w}x{h}" for sizes in TARGET_RESOLUTIONS.values() 
+                                for w, h in sizes]
+        size_dropdown = ttk.Combobox(main_frame, textvariable=self.output_size, 
+                                    values=size_options, state="readonly", width=15)
+        size_dropdown.grid(row=2, column=1, sticky=tk.W, padx=5)
+
         # 背景色設定
         bg_frame = ttk.Frame(main_frame)
-        bg_frame.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=5)
+        bg_frame.grid(row=3, column=0, columnspan=3, sticky=tk.W, pady=5)
         
         ttk.Label(bg_frame, text="背景色:").grid(row=0, column=0, sticky=tk.W)
         self.bg_color = tk.StringVar(value="#FFFFFF")
@@ -82,10 +94,10 @@ class BatchProcessor:
                         variable=self.use_transparent).grid(row=0, column=3, padx=10)
 
         # アライメントモード選択
-        ttk.Label(main_frame, text="リサイズ位置:").grid(row=3, column=0, sticky=tk.W, pady=10)
+        ttk.Label(main_frame, text="リサイズ位置:").grid(row=4, column=0, sticky=tk.W, pady=10)
         self.align_mode = tk.StringVar(value="CENTER")
         align_frame = ttk.Frame(main_frame)
-        align_frame.grid(row=3, column=1, columnspan=2, sticky=tk.W)
+        align_frame.grid(row=4, column=1, columnspan=2, sticky=tk.W)
 
         align_modes = [
             ("左上", "TOP_LEFT"), ("上", "TOP_CENTER"), ("右上", "TOP_RIGHT"),
@@ -99,7 +111,7 @@ class BatchProcessor:
 
         # ボタンフレーム
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=4, column=0, columnspan=3, pady=20)
+        button_frame.grid(row=5, column=0, columnspan=3, pady=20)
         
         # リサイズボタン
         self.resize_button = ttk.Button(button_frame, text="リサイズ実行", 
@@ -120,10 +132,10 @@ class BatchProcessor:
         self.progress_var = tk.DoubleVar()
         self.progress = ttk.Progressbar(main_frame, length=300, mode='determinate', 
                                     variable=self.progress_var)
-        self.progress.grid(row=5, column=0, columnspan=3, pady=10)
+        self.progress.grid(row=6, column=0, columnspan=3, pady=10)
         
         self.status_var = tk.StringVar(value="待機中...")
-        ttk.Label(main_frame, textvariable=self.status_var).grid(row=6, column=0, columnspan=3)
+        ttk.Label(main_frame, textvariable=self.status_var).grid(row=7, column=0, columnspan=3)
 
     def select_folder(self):
         """フォルダ選択ダイアログを表示"""
@@ -137,22 +149,25 @@ class BatchProcessor:
         if color:
             self.bg_color.set(color)
 
-    def find_best_resolution(self, width, height):
-        """最適な解像度を見つける"""
-        original_ratio = width / height
-        best_score = float('inf')
-        best_resolution = None
 
-        for resolutions in TARGET_RESOLUTIONS.values():
-            for target_width, target_height in resolutions:
-                target_ratio = target_width / target_height
-                score = abs(original_ratio - target_ratio)
+
+    # def find_best_resolution(self, width, height):
+    #     """最適な解像度を見つける"""
+    #     original_ratio = width / height
+    #     best_score = float('inf')
+    #     best_resolution = None
+
+    #     for resolutions in TARGET_RESOLUTIONS.values():
+    #         for target_width, target_height in resolutions:
+    #             target_ratio = target_width / target_height
+    #             score = abs(original_ratio - target_ratio)
                 
-                if score < best_score:
-                    best_score = score
-                    best_resolution = (target_width, target_height)
+    #             if score < best_score:
+    #                 best_score = score
+    #                 best_resolution = (target_width, target_height)
 
-        return best_resolution
+    #     return best_resolution
+        
 
     def calculate_crop_box(self, img_size, target_size, align_mode):
         """アライメントモードに基づいて切り取り範囲を計算"""
@@ -179,27 +194,6 @@ class BatchProcessor:
 
         return (x, y, x + target_width, y + target_height), (new_width, new_height)
 
-    def resize_image(self, input_path, output_path, align_mode_str):
-        """画像のリサイズ処理"""
-        try:
-            align_mode = AlignMode[align_mode_str]
-            with Image.open(input_path) as img:
-                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-                    img = img.convert('RGBA')
-                else:
-                    img = img.convert('RGB')
-
-                best_resolution = self.find_best_resolution(*img.size)
-                crop_box, resize_size = self.calculate_crop_box(img.size, best_resolution, align_mode)
-                
-                resized_img = img.resize(resize_size, Image.Resampling.LANCZOS)
-                final_img = resized_img.crop(crop_box)
-                
-                final_img.save(output_path, format='PNG', optimize=True)
-                return True
-        except Exception as e:
-            print(f"Error processing {input_path}: {e}")
-            return False
 
     def flip_image(self, input_path, output_path):
         """画像の反転処理"""
@@ -218,7 +212,17 @@ class BatchProcessor:
             return False
 
     def run_resize_processing(self):
-        """リサイズ処理の実行"""
+        """
+        画像の一括リサイズ処理を実行する
+        - マルチスレッドで並列処理
+        - 進捗状況の表示
+        - 中断機能
+        """
+        print("処理開始")
+        # GUIからの設定値を取得（スレッドセーフな処理のため先に取得）
+        output_size = self.output_size.get()
+        print(f"Selected output size: {output_size}")
+        
         if self.process_status.is_running:
             return
 
@@ -226,116 +230,162 @@ class BatchProcessor:
         if not self.validate_folder(input_folder):
             return
 
+        # 処理状態を初期化
         self.process_status.is_running = True
-        self.update_button_states()
-        self.root.update()  # この行を追加
         self.process_status.should_stop = False
+        self.update_button_states()
 
         try:
             # 出力フォルダの作成
             output_folder = os.path.join(input_folder, "resize")
             os.makedirs(output_folder, exist_ok=True)
 
-            # 画像ファイルのリストを作成
+            # 処理対象ファイルの収集
             supported_formats = {'.jpg', '.jpeg', '.png', '.webp'}
             files_to_process = [f for f in os.listdir(input_folder) 
-                              if os.path.splitext(f)[1].lower() in supported_formats]
+                            if os.path.splitext(f)[1].lower() in supported_formats]
             
             if not files_to_process:
                 self.status_var.set("処理対象の画像がありません。")
                 return
 
+            # GUI設定値の取得
+            align_mode = self.align_mode.get()
+            use_transparent = self.use_transparent.get()
+            resize_mode = self.resize_mode.get()
+            bg_color = self.bg_color.get()
+
             total_files = len(files_to_process)
             processed_files = 0
+            futures = []
 
-            for filename in files_to_process:
+            def process_image(input_path, output_path, output_size):
+                """
+                個別画像の処理
+                Args:
+                    input_path: 入力画像パス
+                    output_path: 出力画像パス
+                    output_size: 出力サイズ設定（"AUTO"または"幅x高さ"形式）
+                """
+                print(f"Processing with size: {output_size}")
                 if self.process_status.should_stop:
-                    break
+                    return False
+                try:
+                    with self.pil_lock:  # 画像処理をスレッドセーフに
+                        with Image.open(input_path) as img:
+                            # 画像モードの設定
+                            has_alpha = 'A' in img.getbands() or 'transparency' in img.info
+                            if use_transparent and has_alpha:
+                                img = img.convert('RGBA')
+                            elif use_transparent:
+                                img = img.convert('RGBA')
+                            else:
+                                img = img.convert('RGB')
 
-                input_path = os.path.join(input_folder, filename)
-                output_path = os.path.join(output_folder,
-                                         os.path.splitext(filename)[0] + ".png")
-                
-                if self.resize_image(input_path, output_path, self.align_mode.get()):
-                    processed_files += 1
-                    progress = (processed_files / total_files) * 100
-                    self.progress_var.set(progress)
-                    self.status_var.set(f"処理中... {processed_files}/{total_files}")
-                
-                self.root.update()
+                            # 出力サイズの決定
+                            if output_size == "AUTO":
+                                # 自動計算モード
+                                original_ratio = img.size[0] / img.size[1]
+                                best_score = float('inf')
+                                best_resolution = None
 
-            if self.process_status.should_stop:
-                self.status_var.set("処理が中止されました。")
-            else:
-                self.status_var.set("リサイズ処理が完了しました。")
+                                for resolutions in TARGET_RESOLUTIONS.values():
+                                    for target_width, target_height in resolutions:
+                                        target_ratio = target_width / target_height
+                                        score = abs(original_ratio - target_ratio)
+                                        if score < best_score:
+                                            best_score = score
+                                            best_resolution = (target_width, target_height)
+                            else:
+                                # 手動サイズ指定モード
+                                w, h = map(int, output_size.split('x'))
+                                best_resolution = (w, h)
+                            
+                            # リサイズ処理
+                            if resize_mode == "CROP":
+                                # トリミングモード
+                                crop_box, resize_size = self.calculate_crop_box(
+                                    img.size, best_resolution, AlignMode[align_mode])
+                                resized_img = img.resize(resize_size, Image.Resampling.LANCZOS)
+                                final_img = resized_img.crop(crop_box)
+                            else:
+                                # フィットモード
+                                ratio = min(best_resolution[0] / img.size[0], 
+                                        best_resolution[1] / img.size[1])
+                                new_size = (int(img.size[0] * ratio), 
+                                        int(img.size[1] * ratio))
+                                resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
+                                
+                                # 背景画像の作成
+                                if use_transparent:
+                                    final_img = Image.new('RGBA', best_resolution, (0, 0, 0, 0))
+                                else:
+                                    bg_color_rgb = tuple(int(bg_color[i:i+2], 16) 
+                                                    for i in (1, 3, 5))
+                                    final_img = Image.new('RGB', best_resolution, bg_color_rgb)
+                                
+                                # リサイズ画像の配置
+                                paste_x = (best_resolution[0] - new_size[0]) // 2
+                                paste_y = (best_resolution[1] - new_size[1]) // 2
+                                final_img.paste(resized_img, (paste_x, paste_y))
+
+                            # 画像の保存
+                            final_img.save(output_path, format='PNG', 
+                                        optimize=not use_transparent)
+                    return True
+                except Exception as e:
+                    print(f"Error processing {input_path}: {e}")
+                    return False
+
+            # 並列処理の実行
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [
+                    executor.submit(
+                        process_image,
+                        os.path.join(input_folder, filename),
+                        os.path.join(output_folder, os.path.splitext(filename)[0] + ".png"),
+                        output_size
+                    ) for filename in files_to_process
+                ]
+
+                # 結果の取得と進捗更新
+                for future in concurrent.futures.as_completed(futures):
+                    if self.process_status.should_stop:
+                        executor.shutdown(wait=False)
+                        break
+                    
+                    try:
+                        success = future.result()
+                        if success:
+                            processed_files += 1
+                            progress = (processed_files / total_files) * 100
+                            self.progress_var.set(progress)
+                            self.status_var.set(f"処理中... {processed_files}/{total_files}")
+                    except Exception as e:
+                        print(f"エラー発生: {e}")
+                        continue
+                    
+                    self.root.update()
+
+                # 処理結果の表示
+                if self.process_status.should_stop:
+                    self.status_var.set("処理が中止されました。")
+                else:
+                    self.status_var.set("リサイズ処理が完了しました。")
 
         except Exception as e:
             self.status_var.set(f"エラーが発生しました: {str(e)}")
         finally:
+            # 状態のクリーンアップ
             self.process_status.is_running = False
             self.process_status.should_stop = False
             self.update_button_states()
             self.root.update()
             
-    def resize_image(self, input_path, output_path, align_mode_str):
-        """画像のリサイズ処理"""
-        try:
-            align_mode = AlignMode[align_mode_str]
-            with Image.open(input_path) as img:
-                # まず元画像を適切なモードに変換
-                has_alpha = 'A' in img.getbands() or 'transparency' in img.info
-                if self.use_transparent.get() and has_alpha:
-                    # 透明背景を使用し、元画像に透過情報がある場合
-                    img = img.convert('RGBA')
-                elif self.use_transparent.get():
-                    # 透明背景を使用するが、元画像に透過情報がない場合
-                    img = img.convert('RGBA')
-                else:
-                    # 透明背景を使用しない場合
-                    img = img.convert('RGB')
-
-                best_resolution = self.find_best_resolution(*img.size)
-                
-                if self.resize_mode.get() == "CROP":
-                    # 既存の切り取りモード
-                    crop_box, resize_size = self.calculate_crop_box(img.size, best_resolution, align_mode)
-                    resized_img = img.resize(resize_size, Image.Resampling.LANCZOS)
-                    final_img = resized_img.crop(crop_box)
-                else:
-                    # フィットモード
-                    ratio = min(best_resolution[0] / img.size[0], best_resolution[1] / img.size[1])
-                    new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                    resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
-                    
-                    if self.use_transparent.get():
-                        # 透明背景の場合
-                        final_img = Image.new('RGBA', best_resolution, (0, 0, 0, 0))
-                        # 中央に配置
-                        paste_x = (best_resolution[0] - new_size[0]) // 2
-                        paste_y = (best_resolution[1] - new_size[1]) // 2
-                        final_img.paste(resized_img, (paste_x, paste_y))
-                    else:
-                        # 背景色を使用する場合
-                        bg_color = tuple(int(self.bg_color.get()[i:i+2], 16) for i in (1, 3, 5))
-                        final_img = Image.new('RGB', best_resolution, bg_color)
-                        # 中央に配置
-                        paste_x = (best_resolution[0] - new_size[0]) // 2
-                        paste_y = (best_resolution[1] - new_size[1]) // 2
-                        final_img.paste(resized_img, (paste_x, paste_y))
-                
-                # 保存
-                if self.use_transparent.get():
-                    final_img.save(output_path, format='PNG')
-                else:
-                    final_img.save(output_path, format='PNG', optimize=True)
-                
-                return True
-        except Exception as e:
-            print(f"Error processing {input_path}: {e}")
-            return False
+    
     
     def run_flip_processing(self):
-        """反転処理の実行"""
+        """反転処理の実行（並列処理版）"""
         if self.process_status.is_running:
             return
 
@@ -344,22 +394,18 @@ class BatchProcessor:
             return
 
         self.process_status.is_running = True
-        self.update_button_states()
-        self.root.update()
         self.process_status.should_stop = False
+        self.update_button_states()
 
         try:
-            # 出力フォルダの作成
             output_folder = os.path.join(input_folder, "flipped")
             os.makedirs(output_folder, exist_ok=True)
 
-            # 画像ファイルのリストを作成（サポートされている形式のみ）
             supported_formats = {'.jpg', '.jpeg', '.png', '.webp'}
             files = sorted([f for f in os.listdir(input_folder) 
                         if os.path.splitext(f)[1].lower() in supported_formats])
             
-            # 奇数番目（1から数えて）のファイルのみを抽出
-            odd_numbered_files = files[::2]  # 0, 2, 4... のインデックスを取得（1枚目、3枚目、5枚目...に相当）
+            odd_numbered_files = files[::2]
             
             if not odd_numbered_files:
                 self.status_var.set("処理対象の画像がありません。")
@@ -368,25 +414,54 @@ class BatchProcessor:
             total_files = len(odd_numbered_files)
             processed_files = 0
 
-            for filename in odd_numbered_files:
+            def process_flip(input_path, output_path):
                 if self.process_status.should_stop:
-                    break
+                    return False
+                try:
+                    with self.pil_lock:
+                        with Image.open(input_path) as img:
+                            if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                                img = img.convert('RGBA')
+                            else:
+                                img = img.convert('RGB')
+                            
+                            flipped_img = ImageOps.mirror(img)
+                            flipped_img.save(output_path, format='PNG', optimize=True)
+                    return True
+                except Exception as e:
+                    print(f"Error processing {input_path}: {e}")
+                    return False
 
-                input_path = os.path.join(input_folder, filename)
-                output_path = os.path.join(output_folder, filename)
-                
-                if self.flip_image(input_path, output_path):
-                    processed_files += 1
-                    progress = (processed_files / total_files) * 100
-                    self.progress_var.set(progress)
-                    self.status_var.set(f"処理中... {processed_files}/{total_files}")
-                
-                self.root.update()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [
+                    executor.submit(
+                        process_flip,
+                        os.path.join(input_folder, filename),
+                        os.path.join(output_folder, filename)
+                    ) for filename in odd_numbered_files
+                ]
 
-            if self.process_status.should_stop:
-                self.status_var.set("処理が中止されました。")
-            else:
-                self.status_var.set("反転処理が完了しました。")
+                for future in concurrent.futures.as_completed(futures):
+                    if self.process_status.should_stop:
+                        executor.shutdown(wait=False)
+                        break
+                    
+                    try:
+                        if future.result():
+                            processed_files += 1
+                            progress = (processed_files / total_files) * 100
+                            self.progress_var.set(progress)
+                            self.status_var.set(f"処理中... {processed_files}/{total_files}")
+                    except Exception as e:
+                        print(f"エラー発生: {e}")
+                        continue
+                    
+                    self.root.update()
+
+                if self.process_status.should_stop:
+                    self.status_var.set("処理が中止されました。")
+                else:
+                    self.status_var.set("反転処理が完了しました。")
 
         except Exception as e:
             self.status_var.set(f"エラーが発生しました: {str(e)}")
