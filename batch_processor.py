@@ -168,6 +168,28 @@ class BatchProcessor:
 
     #     return best_resolution
         
+    def calculate_paste_position(self, align_mode, target_size, resized_size):
+        """アライメントモードに基づいて貼り付け位置を計算"""
+        target_w, target_h = target_size
+        resized_w, resized_h = resized_size
+        
+        # 水平位置の計算
+        if align_mode in [AlignMode.TOP_LEFT, AlignMode.CENTER_LEFT, AlignMode.BOTTOM_LEFT]:
+            paste_x = 0
+        elif align_mode in [AlignMode.TOP_RIGHT, AlignMode.CENTER_RIGHT, AlignMode.BOTTOM_RIGHT]:
+            paste_x = target_w - resized_w
+        else:  # CENTER
+            paste_x = (target_w - resized_w) // 2
+
+        # 垂直位置の計算
+        if align_mode in [AlignMode.TOP_LEFT, AlignMode.TOP_CENTER, AlignMode.TOP_RIGHT]:
+            paste_y = 0
+        elif align_mode in [AlignMode.BOTTOM_LEFT, AlignMode.BOTTOM_CENTER, AlignMode.BOTTOM_RIGHT]:
+            paste_y = target_h - resized_h
+        else:  # CENTER
+            paste_y = (target_h - resized_h) // 2
+
+        return paste_x, paste_y
 
     def calculate_crop_box(self, img_size, target_size, align_mode):
         """アライメントモードに基づいて切り取り範囲を計算"""
@@ -310,23 +332,23 @@ class BatchProcessor:
                                 final_img = resized_img.crop(crop_box)
                             else:
                                 # フィットモード
-                                ratio = min(best_resolution[0] / img.size[0], 
-                                        best_resolution[1] / img.size[1])
-                                new_size = (int(img.size[0] * ratio), 
-                                        int(img.size[1] * ratio))
+                                ratio = min(best_resolution[0] / img.size[0], best_resolution[1] / img.size[1])
+                                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
                                 resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
-                                
+
                                 # 背景画像の作成
                                 if use_transparent:
                                     final_img = Image.new('RGBA', best_resolution, (0, 0, 0, 0))
                                 else:
-                                    bg_color_rgb = tuple(int(bg_color[i:i+2], 16) 
-                                                    for i in (1, 3, 5))
+                                    bg_color_rgb = tuple(int(bg_color[i:i+2], 16) for i in (1, 3, 5))
                                     final_img = Image.new('RGB', best_resolution, bg_color_rgb)
-                                
+
                                 # リサイズ画像の配置
-                                paste_x = (best_resolution[0] - new_size[0]) // 2
-                                paste_y = (best_resolution[1] - new_size[1]) // 2
+                                paste_x, paste_y = self.calculate_paste_position(
+                                    AlignMode[align_mode], 
+                                    best_resolution, 
+                                    new_size
+                                )
                                 final_img.paste(resized_img, (paste_x, paste_y))
 
                             # 画像の保存
