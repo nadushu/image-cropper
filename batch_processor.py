@@ -536,13 +536,19 @@ class BatchProcessor:
             
             # メインウィンドウとの連携
             if self.image_cropper:
+                self.root.transient(self.image_cropper.root)  # メインウィンドウに従属
                 # ImageCropperの背景色設定を引き継ぐ
                 self.bg_color.set(self.image_cropper.bg_color_hex)
-                self.use_transparent.set(
-                    self.image_cropper.bg_color[3] == 0
-                )
+                self.use_transparent.set(True)             
+                
+                def on_batch_window_focus():
+                    self.root.lift()  # バッチウィンドウを最前面に
+                
+                self.root.bind("<FocusIn>", lambda e: on_batch_window_focus())
+
         else:
             self.root.lift()
+            self.root.focus_force()
 
 def main():
     processor = BatchProcessor()  # ImageProcessor から BatchProcessor に修正

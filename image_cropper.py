@@ -15,6 +15,7 @@ class ImageCropper:
     def __init__(self, root):
         self.root = root
         self.root.title("Image Cropper")
+        self.root.lift()  # 起動時に最前面に表示
         self._init_variables()
         self._setup_ui()
         self._setup_bindings()
@@ -229,7 +230,7 @@ class ImageCropper:
         ttk.Button(bg_frame, text="色選択", 
                 command=self.choose_color).pack(side=tk.LEFT, padx=5)
 
-        self.use_transparent = tk.BooleanVar(value=False)
+        self.use_transparent = tk.BooleanVar(value=True)
         ttk.Checkbutton(bg_frame, text="透明背景を使用", 
                     variable=self.use_transparent,
                     command=self.on_transparent_change).pack(side=tk.LEFT, padx=10)
@@ -470,23 +471,36 @@ class ImageCropper:
         # 矩形情報を相対位置で保存
         rect_info = self._save_rect_info()
         
-        # 現在の角度を保存
-        current_angle = self.free_rotation_angle
-        
         # 反転フラグを更新
         self.is_flipped = not self.is_flipped
         
-        # 表示用の画像を反転
-        self.pil_image = self.pil_image.transpose(Image.FLIP_LEFT_RIGHT)
+        # 元の画像を読み込む
+        original_image = Image.open(self.current_file_path)
+        if original_image.mode != 'RGBA':
+            original_image = original_image.convert('RGBA')
+            
+        # 反転を適用
+        if self.is_flipped:
+            original_image = original_image.transpose(Image.FLIP_LEFT_RIGHT)
         
+        # 90度回転を適用
+        if self.rotation_angle != 0:
+            original_image = original_image.rotate(
+                -self.rotation_angle,
+                expand=True,
+                fillcolor='white'
+            )
 
-        # 回転がある場合は再適用
-        if current_angle != 0:
-            # original_display_imageも反転（フリー回転のため）
-            self.original_display_image = self.original_display_image.transpose(Image.FLIP_LEFT_RIGHT)
-            self.pil_image = self.original_display_image.copy()
+        # フリー回転用の基準画像を設定（90度回転を適用した状態で）
+        self.original_display_image = original_image.copy()
+        
+        # 表示用の画像を更新
+        self.pil_image = self.original_display_image.copy()
+        
+        # フリー回転を適用
+        if self.free_rotation_angle != 0:
             self.pil_image = self.pil_image.rotate(
-                current_angle,
+                self.free_rotation_angle,
                 expand=True,
                 resample=Image.BILINEAR,
                 fillcolor='white'
@@ -921,11 +935,9 @@ class ImageCropper:
             ("All files", "*.*")
         ]
         return filedialog.askopenfilename(filetypes=file_types)
-
+    
     def _init_image_settings(self):
         """画像読み込み時の初期設定"""
-        self.rotation_angle = 0
-        
         if self.pil_image.mode != 'RGBA':
             self.pil_image = self.pil_image.convert('RGBA')
         
@@ -958,19 +970,23 @@ class ImageCropper:
 
         cropped_image = self._get_cropped_image()
         if cropped_image:
-            # 現在のモードのサイズを取得
-            current_size = self.crop_modes[self.current_mode][self.mode_indices[self.current_mode]]
-            target_width, target_height = current_size
-
-            # 現在のサイズを確認
-            current_width, current_height = cropped_image.size
+            # リサイズが必要かどうかを確認
+            should_resize = force_resize or self.resize_save_mode
             
-            # サイズが異なる場合は必ずリサイズ (force_resizeやresize_save_modeに関係なく)
-            if current_width != target_width or current_height != target_height:
-                cropped_image = cropped_image.resize(
-                    (target_width, target_height),
-                    Image.Resampling.LANCZOS
-                )
+            if should_resize:
+                # 現在のモードのサイズを取得
+                current_size = self.crop_modes[self.current_mode][self.mode_indices[self.current_mode]]
+                target_width, target_height = current_size
+
+                # 現在のサイズを確認
+                current_width, current_height = cropped_image.size
+                
+                # リサイズが必要な場合のみリサイズを実行
+                if current_width != target_width or current_height != target_height:
+                    cropped_image = cropped_image.resize(
+                        (target_width, target_height),
+                        Image.Resampling.LANCZOS
+                    )
 
             self._save_image(cropped_image)
 
@@ -1613,7 +1629,7 @@ class ImageCropper:
     
 if __name__ == "__main__":
     root = TkinterDnD.Tk()
-    root.geometry("1250x1050")  # デフォルトサイズを1050x1050に
+    root.geometry("1300x1050")  # デフォルトサイズを1050x1050に
     root.minsize(1050, 1050)    # 最小サイズも1050x1050に
     app = ImageCropper(root)
     root.mainloop()
