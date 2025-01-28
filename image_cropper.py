@@ -721,6 +721,8 @@ class ImageCropper:
                 self.current_rect_coords = [x1, y1]
                 self.rect_width = x2 - x1
                 self.rect_height = y2 - y1
+                self._update_size_labels()  # この行を追加
+
 
         self.last_drag_y = event.y
         self.last_drag_x = event.x
