@@ -1017,9 +1017,11 @@ class ImageCropper:
             img_array = np.array(original_image)
             img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGRA)
             
-            print(f"保存時の回転角度: {self.free_rotation_angle}")
             height, width = img_array.shape[:2]
             center = (width/2, height/2)
+            
+            # 回転用の背景色を設定
+            bg_color = (0, 0, 0, 0) if self.use_transparent.get() else (255, 255, 255, 255)
             
             # 累積された最終角度で回転を適用
             rotation_matrix = cv2.getRotationMatrix2D(center, self.free_rotation_angle, 1.0)
@@ -1038,7 +1040,7 @@ class ImageCropper:
                 (new_width, new_height),
                 flags=cv2.INTER_LANCZOS4,
                 borderMode=cv2.BORDER_CONSTANT,
-                borderValue=(255, 255, 255, 255)
+                borderValue=bg_color
             )
             
             rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
@@ -1046,10 +1048,11 @@ class ImageCropper:
 
         # 90度回転を適用
         if self.rotation_angle != 0:
+            bg_color = (0, 0, 0, 0) if self.use_transparent.get() else 'white'
             original_image = original_image.rotate(
                 -self.rotation_angle,
                 expand=True,
-                fillcolor='white'
+                fillcolor=bg_color
             )
 
         # スケール計算と座標変換
