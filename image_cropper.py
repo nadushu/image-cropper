@@ -49,6 +49,9 @@ class ImageCropper:
 
         # 左右反転用の変数
         self.is_flipped = False
+            
+        # 境界制限フラグを追加
+        self.boundary_restriction = True
         
         # 保存先のデフォルトパス用変数を追加
         self.save_directory = None
@@ -199,6 +202,16 @@ class ImageCropper:
         )
         self.fixed_size_button.pack(side=tk.LEFT, padx=5, pady=5)
         
+        self.boundary_var = tk.BooleanVar(value=True)
+        self.boundary_button = tk.Checkbutton(
+        self.button_frame,
+        text="境界制限",
+        variable=self.boundary_var,
+        command=self.toggle_boundary_restriction
+        )
+        self.boundary_button.pack(side=tk.LEFT, padx=5, pady=5)
+            
+        
         # モードボタン（順番を指定）
         mode_order = ["1024:1024", "832/1216", "768/1344", "896/1152"]
         self.mode_buttons = {}
@@ -236,11 +249,18 @@ class ImageCropper:
                     command=self.on_transparent_change).pack(side=tk.LEFT, padx=10)
 
         self.batch_button = tk.Button(
-        self.button_frame,
-        text="一括処理",
-        command=self.show_batch_processor)
+            self.button_frame,
+            text="一括処理",
+            command=self.show_batch_processor
+        )
         self.batch_button.pack(side=tk.LEFT, padx=5, pady=5)
         
+        self.batch_crop_button = tk.Button(
+            self.button_frame, 
+            text="一括切り取り", 
+            command=self.batch_crop
+        )
+        self.batch_crop_button.pack(side=tk.LEFT, padx=5, pady=5)
     def show_batch_processor(self):
         """バッチ処理ウィンドウを表示"""
         if self.batch_processor is None:
@@ -301,6 +321,8 @@ class ImageCropper:
         self.root.bind('r', lambda e: self.rotate_image())
         self.root.bind('<Alt-s>', lambda e: self.save_crop(force_resize=True))
         self.root.bind("<Configure>", self.on_window_resize)
+        # 境界制限トグル用のキーバインド
+        self.root.bind('q', lambda e: self.boundary_button.invoke())
         
          # 回転リセット用のキーバインド
         self.root.bind('0', lambda e: self.reset_rotation())
@@ -616,12 +638,15 @@ class ImageCropper:
         new_x2 = x2 + dx
         new_y2 = y2 + dy
         
-        # 境界チェック
-        if (new_x1 >= self.image_bounds['x1'] and 
-            new_x2 <= self.image_bounds['x2'] and 
-            new_y1 >= self.image_bounds['y1'] and 
-            new_y2 <= self.image_bounds['y2']):
-            
+        # 境界チェック（境界制限が有効な場合のみ）
+        can_move = True
+        if self.boundary_restriction:
+            can_move = (new_x1 >= self.image_bounds['x1'] and 
+                    new_x2 <= self.image_bounds['x2'] and 
+                    new_y1 >= self.image_bounds['y1'] and 
+                    new_y2 <= self.image_bounds['y2'])
+        
+        if can_move:
             # 矩形を移動
             self.canvas.coords(self.rect_id, new_x1, new_y1, new_x2, new_y2)
             self.current_rect_coords = [new_x1, new_y1]
@@ -699,44 +724,49 @@ class ImageCropper:
             x2 = current_center_x + new_width / 2
             y2 = current_center_y + new_height / 2
 
-            # 境界チェックと中心点の調整
-            if x1 < self.image_bounds['x1']:
-                # 左境界に接触
-                shift_x = self.image_bounds['x1'] - x1
-                x1 += shift_x
-                x2 += shift_x
-                current_center_x += shift_x
-            elif x2 > self.image_bounds['x2']:
-                # 右境界に接触
-                shift_x = self.image_bounds['x2'] - x2
-                x1 += shift_x
-                x2 += shift_x
-                current_center_x += shift_x
+            if self.boundary_restriction:
+                # 境界制限が有効な場合のみ制限を適用
+                # 境界チェックと中心点の調整
+                if x1 < self.image_bounds['x1']:
+                    # 左境界に接触
+                    shift_x = self.image_bounds['x1'] - x1
+                    x1 += shift_x
+                    x2 += shift_x
+                    current_center_x += shift_x
+                elif x2 > self.image_bounds['x2']:
+                    # 右境界に接触
+                    shift_x = self.image_bounds['x2'] - x2
+                    x1 += shift_x
+                    x2 += shift_x
+                    current_center_x += shift_x
 
-            if y1 < self.image_bounds['y1']:
-                # 上境界に接触
-                shift_y = self.image_bounds['y1'] - y1
-                y1 += shift_y
-                y2 += shift_y
-                current_center_y += shift_y
-            elif y2 > self.image_bounds['y2']:
-                # 下境界に接触
-                shift_y = self.image_bounds['y2'] - y2
-                y1 += shift_y
-                y2 += shift_y
-                current_center_y += shift_y
+                if y1 < self.image_bounds['y1']:
+                    # 上境界に接触
+                    shift_y = self.image_bounds['y1'] - y1
+                    y1 += shift_y
+                    y2 += shift_y
+                    current_center_y += shift_y
+                elif y2 > self.image_bounds['y2']:
+                    # 下境界に接触
+                    shift_y = self.image_bounds['y2'] - y2
+                    y1 += shift_y
+                    y2 += shift_y
+                    current_center_y += shift_y
 
-            # 最終的な境界チェック
-            if (x2 - x1) >= min_size and (y2 - y1) >= min_size and \
-            x1 >= self.image_bounds['x1'] and x2 <= self.image_bounds['x2'] and \
-            y1 >= self.image_bounds['y1'] and y2 <= self.image_bounds['y2']:
-                # 矩形を更新
-                self.canvas.coords(self.rect_id, x1, y1, x2, y2)
-                self.current_rect_coords = [x1, y1]
-                self.rect_width = x2 - x1
-                self.rect_height = y2 - y1
-                self._update_size_labels()  # この行を追加
-
+            # サイズチェック (最小サイズのみ制限)
+            if (x2 - x1) >= min_size and (y2 - y1) >= min_size:
+                # 境界制限が無効の場合または境界内の場合に矩形を更新
+                if not self.boundary_restriction or (
+                    x1 >= self.image_bounds['x1'] and 
+                    x2 <= self.image_bounds['x2'] and 
+                    y1 >= self.image_bounds['y1'] and 
+                    y2 <= self.image_bounds['y2']
+                ):
+                    self.canvas.coords(self.rect_id, x1, y1, x2, y2)
+                    self.current_rect_coords = [x1, y1]
+                    self.rect_width = x2 - x1
+                    self.rect_height = y2 - y1
+                    self._update_size_labels()
 
         self.last_drag_y = event.y
         self.last_drag_x = event.x
@@ -746,14 +776,34 @@ class ImageCropper:
         self.is_right_dragging = False
         self.last_drag_y = None
 
+    def toggle_boundary_restriction(self):
+        """境界制限のオン/オフを切り替え"""
+        self.boundary_restriction = self.boundary_var.get()
+
+    # _handle_rect_movement メソッドを修正
     def _handle_rect_movement(self, event):
         """矩形の移動処理"""
         coords = self.canvas.coords(self.rect_id)
         width = coords[2] - coords[0]
         height = coords[3] - coords[1]
         
-        new_position = self._calculate_new_position(event, width, height)
-        self._update_rect_position(new_position, width, height)
+        new_x = event.x - self.drag_offset_x
+        new_y = event.y - self.drag_offset_y
+        
+        if self.boundary_restriction:
+            # 境界制限が有効な場合のみ制限を適用
+            new_x = max(self.image_bounds['x1'], 
+                    min(new_x, self.image_bounds['x2'] - width))
+            new_y = max(self.image_bounds['y1'], 
+                    min(new_y, self.image_bounds['y2'] - height))
+        
+        self.canvas.coords(
+            self.rect_id,
+            new_x, new_y,
+            new_x + width,
+            new_y + height
+        )
+        self.current_rect_coords = [new_x, new_y]
 
     def _handle_rect_resize(self, event):
         """矩形のリサイズ処理"""
@@ -828,7 +878,7 @@ class ImageCropper:
         if self.rect_id:
             self.canvas.delete(self.rect_id)
         
-        constrained_pos = self._constrain_to_image(event)
+        constrained_pos = self._constrain_to_image(event) if self.boundary_restriction else (event.x, event.y)
         rect_dims = self._calculate_rect_dimensions(constrained_pos)
         self._create_new_rect(rect_dims)
 
@@ -1090,6 +1140,230 @@ class ImageCropper:
         file_path = self._get_save_path()
         if file_path:
             image.save(file_path, "PNG")
+    def batch_crop(self):
+        """現在の矩形設定を使用して同じフォルダの全画像を一括処理する"""
+        if not self.current_file_path or not self.rect_id:
+            messagebox.showerror("エラー", "画像と切り取り範囲を選択してください。")
+            return
+            
+        # 現在のフォルダパスを取得
+        current_folder = os.path.dirname(self.current_file_path)
+        
+        # 出力フォルダ作成
+        output_folder = os.path.join(current_folder, "batch_cropped")
+        os.makedirs(output_folder, exist_ok=True)
+        
+        # 現在の切り取り設定を保存
+        crop_settings = self._save_crop_settings()
+        
+        # サポートされているファイル形式を定義
+        supported_formats = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tiff')
+        
+        # フォルダ内の全画像を取得
+        image_files = [f for f in os.listdir(current_folder) 
+                    if os.path.isfile(os.path.join(current_folder, f)) and 
+                    os.path.splitext(f)[1].lower() in supported_formats]
+        
+        processed_count = 0
+        error_count = 0
+        
+        # 進捗ダイアログを表示
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("一括処理中")
+        progress_window.geometry("300x100")
+        progress_window.transient(self.root)
+        progress_window.grab_set()
+        
+        progress_label = tk.Label(progress_window, text="画像を処理しています...")
+        progress_label.pack(pady=10)
+        
+        count_label = tk.Label(progress_window, text=f"0 / {len(image_files)}")
+        count_label.pack(pady=5)
+        
+        progress_window.update()
+        
+        # 各画像ファイルを処理
+        for i, filename in enumerate(image_files):
+            try:
+                input_path = os.path.join(current_folder, filename)
+                output_path = os.path.join(output_folder, os.path.splitext(filename)[0] + ".png")
+                
+                # 現在処理中のファイルをスキップ（同じファイルなので）
+                if input_path == self.current_file_path:
+                    continue
+                    
+                # 画像を処理
+                success = self._batch_process_image(input_path, output_path, crop_settings)
+                
+                if success:
+                    processed_count += 1
+                else:
+                    error_count += 1
+                    
+                # 進捗表示を更新
+                count_label.config(text=f"{i+1} / {len(image_files)}")
+                progress_window.update()
+                
+            except Exception as e:
+                print(f"Error processing {filename}: {e}")
+                error_count += 1
+        
+        # 処理完了後、ダイアログを閉じる
+        progress_window.destroy()
+        
+        # 結果を表示
+        messagebox.showinfo("処理完了", 
+                            f"処理完了: {processed_count}件\n"
+                            f"エラー: {error_count}件\n"
+                            f"保存先: {output_folder}")
+
+    def _save_crop_settings(self):
+        """現在の切り取り設定を保存"""
+        if not self.rect_id:
+            return None
+            
+        # キャンバス上の矩形座標を取得
+        coords = self.canvas.coords(self.rect_id)
+        
+        # 画像上の実際の座標に変換
+        scale_factor = 1.0 / self.scale
+        image_coords = {
+            'x1': (coords[0] - self.image_bounds['x1']) * scale_factor,
+            'y1': (coords[1] - self.image_bounds['y1']) * scale_factor,
+            'x2': (coords[2] - self.image_bounds['x1']) * scale_factor,
+            'y2': (coords[3] - self.image_bounds['y1']) * scale_factor
+        }
+        
+        # 切り取り設定を辞書として返す
+        return {
+            'coords': image_coords,
+            'rotation_angle': self.rotation_angle,
+            'free_rotation_angle': self.free_rotation_angle if hasattr(self, 'free_rotation_angle') else 0,
+            'is_flipped': self.is_flipped,
+            'resize_save_mode': self.resize_save_mode,
+            'current_mode': self.current_mode,
+            'mode_index': self.mode_indices[self.current_mode],
+            'use_transparent': self.use_transparent.get() if hasattr(self, 'use_transparent') else False,
+            'bg_color': self.bg_color
+        }
+
+    def _batch_process_image(self, input_path, output_path, settings):
+        """一括処理用の画像処理"""
+        try:
+            # 元画像を読み込む
+            img = Image.open(input_path)
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+                
+            # 左右反転
+            if settings['is_flipped']:
+                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+                
+            # 90度単位の回転
+            if settings['rotation_angle'] != 0:
+                bg_color = (0, 0, 0, 0) if settings['use_transparent'] else 'white'
+                img = img.rotate(
+                    -settings['rotation_angle'],
+                    expand=True,
+                    fillcolor=bg_color
+                )
+                
+            # 自由回転
+            if settings['free_rotation_angle'] != 0:
+                import cv2
+                import numpy as np
+                
+                # OpenCVで回転処理
+                img_array = np.array(img)
+                img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGRA)
+                
+                height, width = img_array.shape[:2]
+                center = (width/2, height/2)
+                
+                # 回転用の背景色を設定
+                bg_color = (0, 0, 0, 0) if settings['use_transparent'] else (255, 255, 255, 255)
+                
+                # 回転行列を計算して適用
+                rotation_matrix = cv2.getRotationMatrix2D(center, settings['free_rotation_angle'], 1.0)
+                
+                abs_cos = abs(rotation_matrix[0,0])
+                abs_sin = abs(rotation_matrix[0,1])
+                new_width = int(height * abs_sin + width * abs_cos)
+                new_height = int(height * abs_cos + width * abs_sin)
+                
+                rotation_matrix[0, 2] += new_width/2 - center[0]
+                rotation_matrix[1, 2] += new_height/2 - center[1]
+                
+                rotated = cv2.warpAffine(
+                    img_array,
+                    rotation_matrix,
+                    (new_width, new_height),
+                    flags=cv2.INTER_LANCZOS4,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=bg_color
+                )
+                
+                rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
+                img = Image.fromarray(rotated)
+            
+            # 元画像のサイズと処理後の画像サイズを取得
+            orig_width, orig_height = Image.open(input_path).size
+            processed_width, processed_height = img.size
+            
+            # スケールファクターを計算 (元サイズと処理後サイズの比率)
+            width_ratio = processed_width / orig_width
+            height_ratio = processed_height / orig_height
+            
+            # 切り取り座標をスケーリング
+            crop_coords = settings['coords']
+            scaled_coords = (
+                int(crop_coords['x1'] * width_ratio),
+                int(crop_coords['y1'] * height_ratio),
+                int(crop_coords['x2'] * width_ratio),
+                int(crop_coords['y2'] * height_ratio)
+            )
+            
+            # 座標が画像内に収まるか確認
+            if (scaled_coords[0] < 0 or scaled_coords[1] < 0 or
+                scaled_coords[2] > img.width or scaled_coords[3] > img.height):
+                # 画像の境界を超える場合は調整
+                scaled_coords = (
+                    max(0, scaled_coords[0]),
+                    max(0, scaled_coords[1]),
+                    min(img.width, scaled_coords[2]),
+                    min(img.height, scaled_coords[3])
+                )
+                
+                # 調整後、有効な切り取り範囲があるか確認
+                if scaled_coords[2] - scaled_coords[0] <= 10 or scaled_coords[3] - scaled_coords[1] <= 10:
+                    print(f"Warning: Image {input_path} is too small for the crop area.")
+                    return False
+            
+            # 画像を切り取る
+            cropped_img = img.crop(scaled_coords)
+            
+            # リサイズが必要な場合
+            if settings['resize_save_mode']:
+                current_size = self.crop_modes[settings['current_mode']][settings['mode_index']]
+                target_width, target_height = current_size
+                
+                # 現在のサイズを確認
+                current_width, current_height = cropped_img.size
+                
+                # リサイズが必要な場合のみリサイズを実行
+                if current_width != target_width or current_height != target_height:
+                    cropped_img = cropped_img.resize(
+                        (target_width, target_height),
+                        Image.Resampling.LANCZOS
+                    )
+            
+            # 画像を保存
+            cropped_img.save(output_path, "PNG")
+            return True
+            
+        except Exception as e:
+            print(f"Error in batch processing {input_path}: {e}")
+            return False
             
     def set_save_directory(self):
         """保存先ディレクトリを設定"""
