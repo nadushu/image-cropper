@@ -112,6 +112,10 @@ class ImageCropper:
         """ボタンフレームの作成"""
         self.button_frame = tk.Frame(self.main_frame)
         self.button_frame.pack(side=tk.TOP, fill=tk.X)
+        
+        # 二段目のボタンフレームを追加
+        self.second_button_frame = tk.Frame(self.main_frame)
+        self.second_button_frame.pack(side=tk.TOP, fill=tk.X)
 
     def _create_canvas_container(self):
         """キャンバスコンテナの作成"""
@@ -232,7 +236,7 @@ class ImageCropper:
         self.last_height = self.root.winfo_height()
         
         # 背景色設定
-        bg_frame = ttk.Frame(self.button_frame)
+        bg_frame = ttk.Frame(self.second_button_frame)  # 二段目に配置
         bg_frame.pack(side=tk.LEFT, padx=5, pady=5)
 
         ttk.Label(bg_frame, text="背景色:").pack(side=tk.LEFT)
@@ -248,25 +252,41 @@ class ImageCropper:
                     variable=self.use_transparent,
                     command=self.on_transparent_change).pack(side=tk.LEFT, padx=10)
 
+        # バッチ処理ボタンを二段目に移動
         self.batch_button = tk.Button(
-            self.button_frame,
+            self.second_button_frame,  # 二段目に配置
             text="一括処理",
             command=self.show_batch_processor
         )
         self.batch_button.pack(side=tk.LEFT, padx=5, pady=5)
         
+        # 一括切り取りボタンを二段目に移動
         self.batch_crop_button = tk.Button(
-            self.button_frame, 
+            self.second_button_frame,  # 二段目に配置
             text="一括切り取り", 
             command=self.batch_crop
         )
         self.batch_crop_button.pack(side=tk.LEFT, padx=5, pady=5)
+        
     def show_batch_processor(self):
         """バッチ処理ウィンドウを表示"""
-        if self.batch_processor is None:
+        try:
+            # すでにウィンドウが存在し、閉じられていないかチェック
+            if self.batch_processor is not None and hasattr(self.batch_processor, 'root') and self.batch_processor.root.winfo_exists():
+                # ウィンドウが存在する場合、フォーカスを戻す
+                self.batch_processor.root.lift()
+                self.batch_processor.root.focus_force()
+            else:
+                # 新しいインスタンスを作成
+                from batch_processor import BatchProcessor
+                self.batch_processor = BatchProcessor(self)
+                self.batch_processor.show_window()
+        except Exception as e:
+            # エラーが発生した場合は新しいインスタンスを作成
+            print(f"バッチ処理ウィンドウの表示エラー: {e}")
             from batch_processor import BatchProcessor
             self.batch_processor = BatchProcessor(self)
-        self.batch_processor.show_window()
+            self.batch_processor.show_window()
         
     def choose_color(self):
         """統一されたカラーピッカー"""
@@ -416,12 +436,17 @@ class ImageCropper:
         x_position = (viewport_width - scaled_width) // 2
         y_position = (viewport_height - scaled_height) // 2
         
+        # 背景色の設定
+        bg_color_hex = self.bg_color_hex
+        if self.use_transparent.get():
+            bg_color_hex = "#FFFFFF"  # 透明背景の場合も表示用には白を使用
+        
         # 画像の背景を描画
         self.canvas.create_rectangle(
             x_position, y_position,
             x_position + scaled_width,
             y_position + scaled_height,
-            fill="white",
+            fill=bg_color_hex,
             outline=""
         )
 
@@ -442,6 +467,7 @@ class ImageCropper:
             'center_x': viewport_width // 2,
             'center_y': viewport_height // 2
         }
+
 
     def _restore_selection(self):
         """選択範囲の復元"""
@@ -578,6 +604,9 @@ class ImageCropper:
         # 矩形情報を保存
         rect_info = self._save_rect_info()
         
+        # 背景色の設定
+        bg_color = (0, 0, 0, 0) if self.use_transparent.get() else self.bg_color
+        
         # バックアップ画像から新しい角度で回転（表示用）
         if hasattr(self, 'pil_image'):
             del self.pil_image
@@ -585,7 +614,7 @@ class ImageCropper:
             angle,
             expand=True,
             resample=Image.BILINEAR,
-            fillcolor='white'
+            fillcolor=bg_color
         )
         
         self.display_image()
@@ -594,6 +623,7 @@ class ImageCropper:
             self._restore_rect_from_info(rect_info)
         
         self.rotation_timer = None
+
 
     def end_free_rotation(self, event):
         """フリー回転の終了"""
@@ -945,6 +975,16 @@ class ImageCropper:
 
     def load_image_from_path(self, file_path):
         try:
+            # 回転状態をリセット
+            self.rotation_angle = 0
+            self.free_rotation_angle = 0
+            self.is_rotating = False
+            self.is_flipped = False
+            
+            # 表示用の元画像関連データをリセット
+            if hasattr(self, 'original_display_image'):
+                del self.original_display_image
+            
             # まず元画像を読み込み
             original_image = Image.open(file_path)
             if original_image.mode != 'RGBA':
@@ -1059,6 +1099,9 @@ class ImageCropper:
         if self.is_flipped:
             original_image = original_image.transpose(Image.FLIP_LEFT_RIGHT)
 
+        # 背景色の設定
+        bg_color = (0, 0, 0, 0) if self.use_transparent.get() else self.bg_color
+
         # 自由回転を適用
         if self.free_rotation_angle != 0:
             import cv2
@@ -1070,8 +1113,11 @@ class ImageCropper:
             height, width = img_array.shape[:2]
             center = (width/2, height/2)
             
-            # 回転用の背景色を設定
-            bg_color = (0, 0, 0, 0) if self.use_transparent.get() else (255, 255, 255, 255)
+            # OpenCV用に背景色の順序を変換 (RGBA -> BGRA)
+            cv_bg_color = bg_color
+            if len(bg_color) == 4:
+                r, g, b, a = bg_color
+                cv_bg_color = (b, g, r, a)
             
             # 累積された最終角度で回転を適用
             rotation_matrix = cv2.getRotationMatrix2D(center, self.free_rotation_angle, 1.0)
@@ -1090,7 +1136,7 @@ class ImageCropper:
                 (new_width, new_height),
                 flags=cv2.INTER_LANCZOS4,
                 borderMode=cv2.BORDER_CONSTANT,
-                borderValue=bg_color
+                borderValue=cv_bg_color
             )
             
             rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
@@ -1098,7 +1144,6 @@ class ImageCropper:
 
         # 90度回転を適用
         if self.rotation_angle != 0:
-            bg_color = (0, 0, 0, 0) if self.use_transparent.get() else 'white'
             original_image = original_image.rotate(
                 -self.rotation_angle,
                 expand=True,
@@ -1116,7 +1161,36 @@ class ImageCropper:
         
         x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
         
-        return original_image.crop((x1, y1, x2, y2))
+        # キャンバス外にはみ出す場合は、新しい画像を作成して合成
+        img_width, img_height = original_image.size
+        
+        if x1 < 0 or y1 < 0 or x2 > img_width or y2 > img_height:
+            # 画像外の領域を含む場合、必要なサイズの新しい画像を作成
+            crop_width = x2 - x1
+            crop_height = y2 - y1
+            
+            # 背景色で塗りつぶした新しい画像を作成
+            new_img = Image.new('RGBA', (crop_width, crop_height), bg_color)
+            
+            # 元画像から有効な部分を切り取る座標を計算
+            valid_x1 = max(0, x1)
+            valid_y1 = max(0, y1)
+            valid_x2 = min(img_width, x2)
+            valid_y2 = min(img_height, y2)
+            
+            # 有効な領域があれば切り取って合成
+            if valid_x2 > valid_x1 and valid_y2 > valid_y1:
+                valid_crop = original_image.crop((valid_x1, valid_y1, valid_x2, valid_y2))
+                
+                # 新しい画像の上に有効な領域を配置
+                paste_x = valid_x1 - x1
+                paste_y = valid_y1 - y1
+                new_img.paste(valid_crop, (paste_x, paste_y))
+                
+            return new_img
+        else:
+            # 通常の切り取り
+            return original_image.crop((x1, y1, x2, y2))
 
     def _convert_coords_to_image_space(self, coords):
         """キャンバス座標を画像座標に変換"""
@@ -1255,13 +1329,15 @@ class ImageCropper:
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
                 
+            # 背景色の設定
+            bg_color = (0, 0, 0, 0) if settings['use_transparent'] else settings['bg_color']
+                
             # 左右反転
             if settings['is_flipped']:
                 img = img.transpose(Image.FLIP_LEFT_RIGHT)
                 
             # 90度単位の回転
             if settings['rotation_angle'] != 0:
-                bg_color = (0, 0, 0, 0) if settings['use_transparent'] else 'white'
                 img = img.rotate(
                     -settings['rotation_angle'],
                     expand=True,
@@ -1280,8 +1356,11 @@ class ImageCropper:
                 height, width = img_array.shape[:2]
                 center = (width/2, height/2)
                 
-                # 回転用の背景色を設定
-                bg_color = (0, 0, 0, 0) if settings['use_transparent'] else (255, 255, 255, 255)
+                # OpenCV用に背景色の順序を変換 (RGBA -> BGRA)
+                cv_bg_color = bg_color
+                if len(bg_color) == 4:
+                    r, g, b, a = bg_color
+                    cv_bg_color = (b, g, r, a)
                 
                 # 回転行列を計算して適用
                 rotation_matrix = cv2.getRotationMatrix2D(center, settings['free_rotation_angle'], 1.0)
@@ -1300,7 +1379,7 @@ class ImageCropper:
                     (new_width, new_height),
                     flags=cv2.INTER_LANCZOS4,
                     borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=bg_color
+                    borderValue=cv_bg_color
                 )
                 
                 rotated = cv2.cvtColor(rotated, cv2.COLOR_BGRA2RGBA)
@@ -1326,21 +1405,38 @@ class ImageCropper:
             # 座標が画像内に収まるか確認
             if (scaled_coords[0] < 0 or scaled_coords[1] < 0 or
                 scaled_coords[2] > img.width or scaled_coords[3] > img.height):
-                # 画像の境界を超える場合は調整
-                scaled_coords = (
-                    max(0, scaled_coords[0]),
-                    max(0, scaled_coords[1]),
-                    min(img.width, scaled_coords[2]),
-                    min(img.height, scaled_coords[3])
-                )
                 
-                # 調整後、有効な切り取り範囲があるか確認
-                if scaled_coords[2] - scaled_coords[0] <= 10 or scaled_coords[3] - scaled_coords[1] <= 10:
+                # 画像外の領域を含む場合、必要なサイズの新しい画像を作成
+                crop_width = scaled_coords[2] - scaled_coords[0]
+                crop_height = scaled_coords[3] - scaled_coords[1]
+                
+                # 有効な切り取り範囲があるか確認
+                if crop_width <= 10 or crop_height <= 10:
                     print(f"Warning: Image {input_path} is too small for the crop area.")
                     return False
-            
-            # 画像を切り取る
-            cropped_img = img.crop(scaled_coords)
+                    
+                # 背景色で塗りつぶした新しい画像を作成
+                new_img = Image.new('RGBA', (crop_width, crop_height), bg_color)
+                
+                # 元画像から有効な部分を切り取る座標を計算
+                valid_x1 = max(0, scaled_coords[0])
+                valid_y1 = max(0, scaled_coords[1])
+                valid_x2 = min(img.width, scaled_coords[2])
+                valid_y2 = min(img.height, scaled_coords[3])
+                
+                # 有効な領域があれば切り取って合成
+                if valid_x2 > valid_x1 and valid_y2 > valid_y1:
+                    valid_crop = img.crop((valid_x1, valid_y1, valid_x2, valid_y2))
+                    
+                    # 新しい画像の上に有効な領域を配置
+                    paste_x = valid_x1 - scaled_coords[0]
+                    paste_y = valid_y1 - scaled_coords[1]
+                    new_img.paste(valid_crop, (paste_x, paste_y))
+                    
+                cropped_img = new_img
+            else:
+                # 通常の切り取り
+                cropped_img = img.crop(scaled_coords)
             
             # リサイズが必要な場合
             if settings['resize_save_mode']:
@@ -1364,7 +1460,7 @@ class ImageCropper:
         except Exception as e:
             print(f"Error in batch processing {input_path}: {e}")
             return False
-            
+          
     def set_save_directory(self):
         """保存先ディレクトリを設定"""
         # 現在の保存先かファイルのディレクトリをデフォルトとして表示
@@ -1434,12 +1530,23 @@ class ImageCropper:
         # 回転角度を更新
         self.rotation_angle = (self.rotation_angle + 90) % 360
         
+        # 背景色の設定
+        bg_color = (0, 0, 0, 0) if self.use_transparent.get() else self.bg_color
+        
         # フリー回転の基準となる画像も90度回転させる
         if hasattr(self, 'original_display_image'):
-            self.original_display_image = self.original_display_image.rotate(-90, expand=True)
+            self.original_display_image = self.original_display_image.rotate(
+                -90, 
+                expand=True,
+                fillcolor=bg_color
+            )
         
         # 現在の表示画像を回転
-        self.pil_image = self.pil_image.rotate(-90, expand=True)
+        self.pil_image = self.pil_image.rotate(
+            -90, 
+            expand=True,
+            fillcolor=bg_color
+        )
         
         self.display_image()
         
